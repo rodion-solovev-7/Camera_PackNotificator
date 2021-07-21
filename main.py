@@ -1,14 +1,16 @@
 import logging
 import os
+from collections import deque
 from datetime import datetime, timedelta
 from logging import Logger
 from multiprocessing import Queue, Process
-from typing import List, Callable, Iterable, Dict
+from queue import Empty
+from typing import List, Callable, Iterable, Deque, Optional
 
 import requests
 from dotenv import load_dotenv
 
-from camera_processing import event_iterator
+from camera_processing import get_events
 from worker_events import TaskResult, CamScannerEvent, TaskError
 
 
@@ -27,11 +29,16 @@ def worker_task(
     Кладёт в ``queue`` следующие события-наследники от ``CamScannerEvent``:
 
     - В случае ошибок экземпляр ``TaskError`` с информацией об ошибке.
-    - В случае успешной обработки экземпляр ``TaskError`` со считанными данными.
+    - В случае успешной обработки экземпляр ``TaskResult`` со считанными данными.
     """
 
     events: Iterable[CamScannerEvent]
-    events = event_iterator(video_url, model_path)
+    events = get_events(
+        video_url,
+        model_path,
+        display=True,
+        auto_reconnect=True,
+    )
 
     # бесконечный цикл, который получает коды с конкретной камеры
     start_time = datetime.now()
@@ -79,21 +86,18 @@ def kill_processes(processes: List[Process]) -> None:
 def log_event(logger: Logger, event: CamScannerEvent):
     """Логгирует пришедшее от процессе событие с необходимым уровнем"""
     if isinstance(event, TaskResult):
-        log_level = logging.DEBUG
         message = f"Получены данные от процесса: {event}"
     elif isinstance(event, TaskError):
-        log_level = logging.ERROR
         message = f"Отловленная ошибка в процессе: {event}"
     else:
-        log_level = logging.ERROR
         message = f"Непредусмотренное событие от процесса: {event}"
 
-    logger.log(level=log_level, msg=message)
+    logger.log(level=event.LOG_LEVEL, msg=message)
 
 
 def process_new_result(
         logger: Logger,
-        results_by_process_id: Dict[int, List[TaskResult]],
+        results_by_process_id: List[Deque[TaskResult]],
         new_result: TaskResult,
         domain_url: str,
 ):
@@ -101,55 +105,135 @@ def process_new_result(
     Анализирует последние данные от сканеров и отправляет нужный запрос на сервер.
     """
 
-    url = f'{domain_url}/api/v1_0/new_pack_after_pintset'
-
     # время, за которое +- проезжает пачка (3-5 сек)
     STORE_TIME = timedelta(seconds=7)
+
+    assert len(results_by_process_id) == 2, ("Поддерживается обработка "
+                                             "только 2-ух процессов сканирования")
 
     new_worker_id = new_result.worker_id
     opposite_worker_id = (new_worker_id + 1) % 2
 
-    results = results_by_process_id[new_worker_id]
-    results_opposite = results_by_process_id[opposite_worker_id]
+    events1 = results_by_process_id[new_worker_id]
+    events2 = results_by_process_id[opposite_worker_id]
 
-    results.append(new_result)
+    events1.append(new_result)
 
-    while min(len(results), len(results_opposite)) > 0:
-        r1, r2 = results.pop(), results_opposite.pop()
+    while min(len(events1), len(events2)) > 0:
+        r1, r2 = events1.popleft(), events2.popleft()
+
+        # TODO: пока что всё держится на вере, что рассинхрона между процессами не будет.
+        #  Здесь стоит добавить проверки на нестандартные случаи:
+        #  смещение события в порядке 'прихода', дублирование событий,
+        #  отсутствие события с одной из камер
 
         is_complete1 = r1.qr_code is not None and r1.barcode is not None
         is_complete2 = r2.qr_code is not None and r2.barcode is not None
 
-        some_result = None
-        if is_complete1 and not is_complete2:
-            some_result = r1
-        elif not is_complete1 and is_complete2:
-            some_result = r2
+        success_result: Optional[TaskResult] = None
 
-        # TODO: пока что всё держится на вере, что рассинхрона между процессами не будет.
-        #  Нужно добавить проверки на нестандартные случаи:
-        #  смещение события в порядке 'прихода', дублирование событий, отсутствие события с одной из камер
+        if is_complete1 and is_complete2:
+            # TODO: очень странный и редкий случай:
+            #  возможно, тут нужны будут доп. проверки
+            success_result = r1
 
-        # TODO: определиться с тем, что отправлять при отсутствии обеих пачек
+            message = "QR- и штрихкоды обнаружены с обеих сторон пачки"
+            logger.info(msg=message)
 
-        if some_result is None:
+        elif is_complete1 or is_complete2:
+            success_result = r1 if is_complete1 else r2
 
-            qr_code, barcode = None, None
-        else:
-            qr_code = some_result.qr_code
-            barcode = some_result.barcode
-
-        data = {
-            'qr': qr_code,
-            'barcode': barcode,
-        }
-
-        try:
-            message = f"Отправка данных на сервер: {data}"
+            message = "На одной из сторон пачки обнаружены QR- и штрихкоды"
             logger.debug(msg=message)
-            _ = requests.put(url, json=data, timeout=2)
-        except Exception:
-            logger.error("Аппликатор - нет Сети")
+
+        elif not is_complete1 and not is_complete2:
+            success_result = None
+
+            message = "QR- и штрихкодов нет с обеих сторон пачки"
+            logger.info(msg=message)
+
+        if success_result is None:
+            notify_that_no_packdata(logger, domain_url)
+        else:
+            notify_about_packdata(logger, domain_url, success_result)
+
+
+def notify_about_packdata(logger: Logger, domain_url: str, result: TaskResult):
+    """
+    Оповещает сервер, что QR- и штрихкоды успешно считаны с пачки.
+    Считанные данные также отправляются серверу.
+    """
+
+    success_pack_mapping = f'{domain_url}/api/v1_0/new_pack_after_pintset'
+    REQUEST_TIMEOUT_SEC = 2
+
+    data = {
+        'qr': result.qr_code,
+        'barcode': result.barcode,
+    }
+
+    try:
+        message = f"Отправка данных пачки на сервер: {data}"
+        logger.debug(msg=message)
+        _ = requests.put(success_pack_mapping, json=data, timeout=REQUEST_TIMEOUT_SEC)
+    except Exception:
+        logger.error("Аппликатор - нет Сети")
+
+
+def notify_that_no_packdata(logger: Logger, domain_url: str):
+    """
+    Оповещает сервер, что QR- и штрихкоды не были считаны с текущей пачки.
+    """
+    # TODO: ниже должен быть url для отправки запросов о пачке без QR- и штрихкодов
+    empty_pack_mapping = f'{domain_url}/api/v1_0/!!!__TODO__FILLME__!!!'
+    REQUEST_TIMEOUT_SEC = 2
+
+    try:
+        message = "Отправка извещения о пачке без данных на сервер"
+        logger.debug(msg=message)
+        # TODO: ниже (вместо warning'а) должен быть запрос к серверу для случая,
+        #  когда с обеих сторон пачки не обнаружено кодов
+        logger.warning(msg="ЗАПРОС НЕ РЕАЛИЗОВАН")
+    except Exception:
+        logger.error("Аппликатор - нет Сети")
+
+
+def get_work_mode_from_server(logger: Logger, domain_url: str) -> Optional[str]:
+    """
+    Получает режим работы (в оригинале "записи"!?) с сервера.
+    """
+    get_wmode_mapping = f'{domain_url}/api/v1_0/get_mode'
+    REQUEST_TIMEOUT_SEC = 2
+
+    try:
+        message = "Получение данных о текущем режиме записи"
+        logger.debug(msg=message)
+        response = requests.get(get_wmode_mapping, timeout=REQUEST_TIMEOUT_SEC)
+        wmode = response.json()['work_mode']
+        return wmode
+    except Exception:
+        logger.error("Аппликатор - нет Сети")
+        return None
+
+
+def get_qr_in_one_pack_from_server(logger: Logger, domain_url: str) -> Optional[int]:
+    """
+    Узнаёт от сервера, сколько QR-кодов ожидать на одной пачке
+    """
+    # TODO: ниже должен быть url для получения кол-ва qr-кодов с сервера
+    get_qr_count_mapping = f'{domain_url}/api/v1_0/!!__TODO_FILLME__!!'
+    REQUEST_TIMEOUT_SEC = 2
+
+    try:
+        message = "Получение данных об ожидаемом кол-ве QR-кодов"
+        logger.debug(msg=message)
+        # TODO: ниже (вместо warning'а) должен быть запрос к серверу
+        #  для определения кол-ва кодов в пачке
+        logger.warning(msg="ЗАПРОС НЕ РЕАЛИЗОВАН")
+        return None
+    except Exception:
+        logger.error("Аппликатор - нет Сети")
+        return None
 
 
 def parent_event_loop(
@@ -165,21 +249,28 @@ def parent_event_loop(
 
     Завершается при ``KeyboardInterrupt`` (Ctrl+C в терминале)
     """
-    queue = Queue()
+    QUEUE_REQUEST_TIMEOUT_SEC = 1.5
 
+    queue = Queue()
     processes = get_started_processes(
         task=worker_task,
         queue=queue,
         processes_args=processes_args,
     )
 
-    results_by_process_id: Dict[int, List[TaskResult]] = {
-        i: [] for i in range(len(processes_args))
-    }
+    results_by_process_id: List[Deque[TaskResult]] = [
+        deque() for _, _ in enumerate(processes_args)
+    ]
 
     while True:
         try:
-            event: CamScannerEvent = queue.get()
+            # TODO: здесь должно быть получение и обработка ожидаемого кол-ва пачек с сервера
+
+            try:
+                event: CamScannerEvent = queue.get(timeout=QUEUE_REQUEST_TIMEOUT_SEC)
+            except Empty:
+                continue
+
             event.receive_time = datetime.now()
 
             log_event(logger, event)
@@ -205,15 +296,18 @@ def main():
 
     load_dotenv()
     log_path = os.getenv('LOG_PATH')
+    log_level = os.getenv('LOG_LEVEL')
     model_path = os.getenv('MODEL_PATH')
     domain_url = os.getenv('DOMAIN_URL')
     video_urls_line = os.getenv('VIDEO_URLS')
     video_urls = video_urls_line.split(';')
 
     if len(video_urls) != 2:
-        raise Exception("Данная программа рассчитана на 2 камеры. Ожидается ровно 2 адреса для подключения")
+        message = ("Данная программа рассчитана на 2 камеры. "
+                   "В .env через ';' ожидается ровно 2 адреса для подключения.")
+        raise ValueError(message)
 
-    logging.basicConfig(level='DEBUG', filename=log_path)
+    logging.basicConfig(level=log_level, filename=log_path)
     logger = logging.getLogger(__name__)
 
     # аргументы для worker_task (кроме queue и worker_id) для запуска в разных процессах

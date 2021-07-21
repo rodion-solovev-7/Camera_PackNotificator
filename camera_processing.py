@@ -1,18 +1,19 @@
+from collections import deque
 from datetime import datetime
 from typing import Iterable, Dict, List, Any, Tuple, Optional
 
-import cv2
 import numpy as np
-from cv2 import VideoCapture, resize, cvtColor, COLOR_BGR2RGB, CAP_PROP_FRAME_WIDTH, CAP_PROP_FRAME_HEIGHT, imshow
+from cv2 import (VideoCapture, resize, cvtColor, COLOR_BGR2RGB, CAP_PROP_FRAME_WIDTH,
+                 CAP_PROP_FRAME_HEIGHT, imshow, waitKey)
 from numpy import ndarray
 from tensorflow.lite.python.interpreter import Interpreter
 
 from recognition import ORIG_X, ORIG_Y, dummy_codes
-from worker_events import TaskResult, CamScannerEvent, TaskError
+from worker_events import TaskResult, CamScannerEvent, TaskError, EndScanning
 
 
-def check_pack_on_image(interpreter: Interpreter, image: ndarray) -> bool:
-    """Проверяет наличие pack'а на изображении."""
+def is_pack_exists(interpreter: Interpreter, image: ndarray) -> bool:
+    """Проверяет наличие пачки на изображении."""
 
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
@@ -39,7 +40,7 @@ def check_pack_on_image(interpreter: Interpreter, image: ndarray) -> bool:
 
 
 def read_barcode_and_qr(
-        images: List[ndarray],
+        images: Iterable[ndarray],
         width: float,
         height: float,
 ) -> Tuple[Optional[str], Optional[str]]:
@@ -49,83 +50,108 @@ def read_barcode_and_qr(
         barcode = barcode if barcode != '' else None
         qr_code = qr_code if qr_code != '' else None
         return barcode, qr_code
+
     # TODO: проверить наличие и конкретизировать исключение, либо убрать проверку
     except Exception:
         return None, None
 
 
-def event_iterator(
+def display_image(image: ndarray) -> None:
+    """
+    Рендерит текущий кадр из видео.
+
+    (Плохо влияет на производительность, но позволяет
+    в реальном времени следить за ситуацией.)
+    """
+    image2display = resize(image, (ORIG_X, ORIG_Y))
+    imshow('image', image2display)
+    waitKey(1)
+
+
+def reconnect_to_video_if_need(
+        video_url: str,
+        video: Optional[VideoCapture] = None,
+) -> VideoCapture:
+    """
+    Проверяет доступность видео и переподключается к источнику, если необходимо.
+    """
+    if video is not None:
+        video.release()
+    return VideoCapture(video_url)
+
+
+def get_events(
         video_url: str,
         model_path: str,
+        display: bool = True,
+        auto_reconnect: bool = True,
 ) -> Iterable[CamScannerEvent]:
     """
     Бесконечный итератор, возвращающий события с камеры-сканера.
     """
 
-    video: VideoCapture = VideoCapture(video_url)
+    video: VideoCapture = reconnect_to_video_if_need(video_url)
     width: float = video.get(CAP_PROP_FRAME_WIDTH)
     height: float = video.get(CAP_PROP_FRAME_HEIGHT)
 
     interpreter: Interpreter = Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
 
-    MAX_IMAGES_COUNT = 150
+    # больше значений - больше подвисаний
+    MAX_IMAGES_COUNT = 1
     FRAMES_PER_CHECK = 15
-    last_images = []
+    last_images = deque()
 
     last_barcode = None
     result_barcode = None
     result_qr_code = None
 
     is_result_complete = False
-    is_pack_visible = False
-    is_pack_previously_visible = False
+    is_pack_visible_now = False
+    is_pack_visible_before = False
 
-    i = 0
+    frame_counter = 0
     while True:
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
         is_image_exists, image = video.read()
         is_image_exists: bool
         image: ndarray
 
         if not is_image_exists:
-            message = "Нет изображения! Попытка переподключения к источнику"
+            message = "Нет изображения!"
             yield TaskError(
-                error_message=message,
+                message=message,
                 finish_time=datetime.now(),
             )
-            video.release()
-            video = VideoCapture(video_url)
+
+            if not auto_reconnect:
+                break
+
+            # TODO: возможно стоит сообщать что-то вроде
+            #  "Нет изображения! Попытка переподключения к источнику"
+            video = reconnect_to_video_if_need(video_url, video)
             continue
 
-        image2 = resize(image, (ORIG_X, ORIG_Y))
-        imshow('image', image2)
+        if display:
+            display_image(image)
 
-        # TODO: возможно стоит или убрать буффер с картинками (возможная потеря функционала ?),
-        #  или начать его использовать (потеря производительности ?)
-        last_images.append(image2)
-        if len(last_images) > MAX_IMAGES_COUNT:
-            last_images.pop(0)
+        last_images.append(image)
+        while len(last_images) > MAX_IMAGES_COUNT:
+            last_images.popleft()
 
-        i = (i + 1) % FRAMES_PER_CHECK
-        if i == 0:
-            is_pack_visible = check_pack_on_image(interpreter, image)
+        frame_counter = (frame_counter + 1) % FRAMES_PER_CHECK
+        if frame_counter == 0:
+            is_pack_visible_now = is_pack_exists(interpreter, image)
 
-        if not is_pack_visible and not is_pack_previously_visible:
+        if not is_pack_visible_now and not is_pack_visible_before:
             continue
 
-        if is_pack_visible:
-            is_pack_previously_visible = True
+        if is_pack_visible_now:
+            is_pack_visible_before = True
+
             if is_result_complete:
                 continue
 
-            # TODO: возможно, здесь предполагалось использовать буффер с изображениями,
-            #  а не одну картинку (в таком случае, у image и image2 не совпадают размеры)
-            images = [image]
-
-            barcode, qr_code = read_barcode_and_qr(images, width, height)
+            barcode, qr_code = read_barcode_and_qr(last_images, width, height)
 
             result_qr_code = qr_code if result_qr_code is None else result_qr_code
             result_barcode = barcode if result_barcode is None else result_barcode
@@ -133,11 +159,11 @@ def event_iterator(
             is_result_complete = result_qr_code is not None and result_barcode is not None
             continue
 
-        if not is_pack_visible and is_pack_previously_visible:
+        if not is_pack_visible_now and is_pack_visible_before:
             # пачка только что прошла, подводим итоги
 
-            if result_barcode is None:
-                result_barcode = last_barcode
+            # если не смогли считать текущий штрихкод, отправляем предыдущий считанный
+            result_barcode = last_barcode if result_barcode is None else result_barcode
             last_barcode = result_barcode
 
             yield TaskResult(
@@ -147,8 +173,15 @@ def event_iterator(
             )
 
             last_images.clear()
-            is_pack_previously_visible = False
+            is_pack_visible_before = False
             is_result_complete = False
             result_qr_code = None
             result_barcode = None
             continue
+
+    message = "Завершение работы"
+    yield EndScanning(
+        message=message,
+        finish_time=datetime.now(),
+    )
+    video.release()

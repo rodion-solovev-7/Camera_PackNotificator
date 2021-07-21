@@ -4,7 +4,7 @@ Created on Sat Jun  6 12:29:01 2020
 @author: sergey
 """
 from collections import Counter
-from typing import List, Tuple
+from typing import List, Tuple, Iterable
 
 import cv2
 import numpy as np
@@ -41,7 +41,7 @@ def get_most_common(values: List[str]) -> str:
 
 
 def dummy_codes(
-        pics: List[ndarray],
+        pics: Iterable[ndarray],
         width: float,
         height: float,
         sizer: float,
