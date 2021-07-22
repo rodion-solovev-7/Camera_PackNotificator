@@ -100,6 +100,7 @@ def process_new_result(
         results_by_process_id: List[Deque[TaskResult]],
         new_result: TaskResult,
         domain_url: str,
+        expected_codes_count: int,
 ):
     """
     Анализирует последние данные от сканеров и отправляет нужный запрос на сервер.
@@ -124,11 +125,14 @@ def process_new_result(
 
         # TODO: пока что всё держится на вере, что рассинхрона между процессами не будет.
         #  Здесь стоит добавить проверки на нестандартные случаи:
-        #  смещение события в порядке 'прихода', дублирование событий,
+        #  смещение события в порядке 'прихода', разделение событий
+        #  (вместо 2 кодов в одном событии пришло 2 события по 1 коду),
         #  отсутствие события с одной из камер
 
-        is_complete1 = r1.qr_code is not None and r1.barcode is not None
-        is_complete2 = r2.qr_code is not None and r2.barcode is not None
+        is_complete1 = (len(r1.qr_codes) == expected_codes_count and
+                        len(r1.barcodes) == expected_codes_count)
+        is_complete2 = (len(r2.qr_codes) == expected_codes_count and
+                        len(r2.barcodes) == expected_codes_count)
 
         success_result: Optional[TaskResult] = None
 
@@ -158,7 +162,11 @@ def process_new_result(
             notify_about_packdata(logger, domain_url, success_result)
 
 
-def notify_about_packdata(logger: Logger, domain_url: str, result: TaskResult):
+def notify_about_packdata(
+        logger: Logger,
+        domain_url: str,
+        result: TaskResult,
+):
     """
     Оповещает сервер, что QR- и штрихкоды успешно считаны с пачки.
     Считанные данные также отправляются серверу.
@@ -167,17 +175,18 @@ def notify_about_packdata(logger: Logger, domain_url: str, result: TaskResult):
     success_pack_mapping = f'{domain_url}/api/v1_0/new_pack_after_pintset'
     REQUEST_TIMEOUT_SEC = 2
 
-    data = {
-        'qr': result.qr_code,
-        'barcode': result.barcode,
-    }
+    for qr_code, barcode in zip(result.qr_codes, result.barcodes):
+        send_data = {
+            'qr': qr_code,
+            'barcode': barcode,
+        }
 
-    try:
-        message = f"Отправка данных пачки на сервер: {data}"
-        logger.debug(msg=message)
-        _ = requests.put(success_pack_mapping, json=data, timeout=REQUEST_TIMEOUT_SEC)
-    except Exception:
-        logger.error("Аппликатор - нет Сети")
+        try:
+            message = f"Отправка данных пачки на сервер: {send_data}"
+            logger.debug(msg=message)
+            _ = requests.put(success_pack_mapping, json=send_data, timeout=REQUEST_TIMEOUT_SEC)
+        except Exception:
+            logger.error("Аппликатор - нет Сети")
 
 
 def notify_that_no_packdata(logger: Logger, domain_url: str):
@@ -191,9 +200,11 @@ def notify_that_no_packdata(logger: Logger, domain_url: str):
     try:
         message = "Отправка извещения о пачке без данных на сервер"
         logger.debug(msg=message)
+
         # TODO: ниже (вместо warning'а) должен быть запрос к серверу для случая,
         #  когда с обеих сторон пачки не обнаружено кодов
         logger.warning(msg="ЗАПРОС НЕ РЕАЛИЗОВАН")
+
     except Exception:
         logger.error("Аппликатор - нет Сети")
 
@@ -216,7 +227,7 @@ def get_work_mode_from_server(logger: Logger, domain_url: str) -> Optional[str]:
         return None
 
 
-def get_qr_in_one_pack_from_server(logger: Logger, domain_url: str) -> Optional[int]:
+def get_codes_count_in_pack_from_server(logger: Logger, domain_url: str) -> Optional[int]:
     """
     Узнаёт от сервера, сколько QR-кодов ожидать на одной пачке
     """
@@ -227,10 +238,12 @@ def get_qr_in_one_pack_from_server(logger: Logger, domain_url: str) -> Optional[
     try:
         message = "Получение данных об ожидаемом кол-ве QR-кодов"
         logger.debug(msg=message)
+
         # TODO: ниже (вместо warning'а) должен быть запрос к серверу
         #  для определения кол-ва кодов в пачке
         logger.warning(msg="ЗАПРОС НЕ РЕАЛИЗОВАН")
-        return None
+        return 1
+
     except Exception:
         logger.error("Аппликатор - нет Сети")
         return None
@@ -262,9 +275,15 @@ def parent_event_loop(
         deque() for _, _ in enumerate(processes_args)
     ]
 
+    expected_codes_count = 1
+
+    ITERATION_PER_REQUEST = 15
+    iteration_count = 0
     while True:
         try:
-            # TODO: здесь должно быть получение и обработка ожидаемого кол-ва пачек с сервера
+            if iteration_count == 0:
+                expected_codes_count = get_codes_count_in_pack_from_server(logger, domain_url)
+            iteration_count = (iteration_count + 1) % ITERATION_PER_REQUEST
 
             try:
                 event: CamScannerEvent = queue.get(timeout=QUEUE_REQUEST_TIMEOUT_SEC)
@@ -276,7 +295,7 @@ def parent_event_loop(
             log_event(logger, event)
 
             if isinstance(event, TaskResult):
-                process_new_result(logger, results_by_process_id, event, domain_url)
+                process_new_result(logger, results_by_process_id, event, domain_url, expected_codes_count)
 
         except KeyboardInterrupt:
             message = "Выполнение прервано пользователем. Закрытие!"

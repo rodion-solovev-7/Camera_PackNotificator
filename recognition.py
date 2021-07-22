@@ -47,8 +47,8 @@ def dummy_codes(
         sizer: float,
 ) -> Tuple[str, str]:
     """Возвращает штрих-код (barcode) и QR-код из серии снимков"""
-    qr_codes = []
-    barcodes = []
+    qr_codes: List[str] = []
+    barcodes: List[str] = []
 
     for pic in pics:
         new_width = int(round(width * sizer))
@@ -62,9 +62,11 @@ def dummy_codes(
 
         for lss in code:
             if lss.type == 'QRCODE':
-                qr_codes.append(lss.data)
+                qr_code: str = lss.data.decode('utf-8')
+                qr_codes.append(qr_code)
             else:
-                barcodes.append(lss.data)
+                barcode: str = lss.data.decode('utf-8')
+                barcodes.append(barcode)
 
     qr_code = get_most_common(qr_codes)
     barcode = get_most_common(barcodes)
