@@ -1,16 +1,21 @@
 import os
 from collections import deque
 from datetime import datetime, timedelta
+from itertools import takewhile
 from multiprocessing import Queue, Process
+from operator import attrgetter
 from queue import Empty
 from typing import List, Callable, Iterable, Deque, Optional, Type
 
 import requests
 from dotenv import load_dotenv
 from loguru import logger
+# noinspection PyUnresolvedReferences
+from requests import ConnectTimeout
 
 from camera_processing import get_events
-from worker_events import TaskResult, CamScannerEvent, TaskError, EndScanning, StartScanning
+from event_handling import EventProcessor
+from events import TaskResult, CamScannerEvent, TaskError, EndScanning, StartScanning
 
 
 def worker_task(
@@ -86,120 +91,128 @@ def kill_processes(processes: List[Process]) -> None:
         process.join()
 
 
-def process_event(
-        event: Type[CamScannerEvent],
-        results_by_process_id: List[Deque[TaskResult]],
-        processes: List[Process],
-        domain_url: str,
-        expected_codes_count: int,
-):
-    """
-    Обрабатывает событие от процесса сканирования.
-    Логирует это событие, если необходимо.
-    """
-    if isinstance(event, TaskResult):
-        message = (f"Получены данные от процесса #{event.worker_id}: "
-                   f"QR={event.qr_codes} "
-                   f"BAR={event.barcodes} "
-                   f"время конца пачки='{event.finish_time}'")
-        logger.debug(message)
-        process_new_result(
-            results_by_process_id,
-            event,
-            domain_url,
-            expected_codes_count,
-        )
-    elif isinstance(event, TaskError):
-        message = (f"В процессе #{event.worker_id} "
-                   f"произошла ошибка: {event.message}")
-        logger.info(message)
-    elif isinstance(event, StartScanning):
-        message = f"Процесс #{event.worker_id} начал сканирование"
-        logger.info(message)
-    elif isinstance(event, EndScanning):
-        message = f"Процесс #{event.worker_id} завершил работу"
-        logger.info(message)
-
-        process = processes[event.worker_id]
-        process.terminate()
-        process.join()
-        alive_count = sum(process.is_alive() for process in processes)
-        if alive_count == 0:
-            raise GeneratorExit("Все процессы завершили работу. Закрытие программы")
-    else:
-        message = f"Для события не написан обработчик: {event}"
-        logger.warning(message)
-
-
-def process_new_result(
+def enqueue_new_result(
         results_by_process_id: List[Deque[TaskResult]],
         new_result: TaskResult,
-        domain_url: str,
-        expected_codes_count: int,
-):
+) -> None:
     """
-    Обрабатывает полученные от сканера QR- и шрихкоды,
-    анализирует последние данные и отправляет нужный запрос на сервер.
-
-    (Ожидает ровно 2 запущенных процесса сканирования!)
+    Обрабатывает полученную от сканера запись с QR- и шрихкодами.
+    Добавляет её в очередь для сопоставления.
     """
-
-    # время, за которое +- проезжает пачка (3-5 сек)
-    STORE_TIME = timedelta(seconds=7)
-
     new_worker_id = new_result.worker_id
-    opposite_worker_id = (new_worker_id + 1) % 2
+    results = results_by_process_id[new_worker_id]
+    results.append(new_result)
 
-    events1 = results_by_process_id[new_worker_id]
-    events2 = results_by_process_id[opposite_worker_id]
 
-    events1.append(new_result)
+def process_latest_results(
+        results_by_process_id: List[Deque[TaskResult]],
+        domain_url: str,
+) -> None:
+    """
+    Анализирует последние результаты от камер из буффера обработки:
 
-    while min(len(events1), len(events2)) > 0:
-        r1, r2 = events1.popleft(), events2.popleft()
+    - сопоставляет данные от двух камер
+    - логгирует сомнительные ситуации
+    - отправляет данные непустых пачек на сервер
+    - для пустых с обеих сторон пачек извещает об отсутствии кода
+    - отправляет нужные запросы на сервер
+    - удаляет устаревшие записи
+    """
+    assert len(results_by_process_id) == 2, "Ожидается ровно 2 запущенных процесса сканирования!"
 
-        # TODO: пока что всё держится на вере, что рассинхрона между процессами не будет.
-        #  Здесь стоит добавить проверки на нестандартные случаи:
-        #  смещение события в порядке 'прихода', разделение событий
-        #  (вместо 2 кодов в одном событии пришло 2 события по 1 коду),
-        #  отсутствие события с одной из камер
+    MAX_CAMERAS_DIFF_TIME = timedelta(seconds=4)
+    """
+    Максимальная разница во времени проезда 
+    одной и той же пачки на разных камерах.
+    """
 
-        is_complete1 = (len(r1.qr_codes) == expected_codes_count and
-                        len(r1.barcodes) == expected_codes_count)
-        is_complete2 = (len(r2.qr_codes) == expected_codes_count and
-                        len(r2.barcodes) == expected_codes_count)
+    RESULT_TIMEOUT_TIME = timedelta(seconds=20)
+    """
+    Время, после которого результат сопоставляется с другими,
+    а затем удаляется из очереди.
+    """
 
-        success_result: Optional[TaskResult] = None
+    current_time = datetime.now()
 
-        if is_complete1 and is_complete2:
-            # TODO: очень странный и редкий случай:
-            #  возможно, тут нужны будут доп. проверки
-            success_result = r1
+    results_by_time = sorted(results_by_process_id[0] + results_by_process_id[1],
+                             key=attrgetter('finish_time'))
 
-            message = "QR- и штрихкоды обнаружены с обеих сторон пачки"
-            logger.info(message)
+    for result in results_by_time:
+        if current_time - result.finish_time < RESULT_TIMEOUT_TIME:
+            break
 
-        elif is_complete1 or is_complete2:
-            success_result = r1 if is_complete1 else r2
+        overdue_result = result
+        opposite_worker_id = (overdue_result.worker_id + 1) % 2
+        results1 = results_by_process_id[overdue_result.worker_id]
+        results2 = results_by_process_id[opposite_worker_id]
 
-            message = "На одной из сторон пачки обнаружены QR- и штрихкоды"
-            logger.debug(message)
+        if overdue_result.is_paired:
+            # этой пачке уже была подобрана пара и они были обработаны
+            results1.popleft()
+            continue
 
-        elif not is_complete1 and not is_complete2:
-            success_result = None
+        logger.debug("Сопоставление данных с пачек")
 
-            message = "QR- и штрихкодов нет с обеих сторон пачки"
-            logger.info(message)
+        def is_relevant_result(r: TaskResult) -> bool:
+            """
+            Определяет находится ли текущий результат
+            в eps-окрестности времени результата другой камеры.
+            """
+            nonlocal overdue_result
+            diff_seconds = (overdue_result.finish_time - r.finish_time).total_seconds()
+            diff_seconds = abs(diff_seconds)
+            diff_time = timedelta(seconds=diff_seconds)
+            return diff_time < MAX_CAMERAS_DIFF_TIME and not r.is_paired
 
-        if success_result is None:
+        relevant_results1 = list(takewhile(is_relevant_result, results1))
+        relevant_results2 = list(takewhile(is_relevant_result, results2))
+
+        if len(relevant_results2) == 0:
+            logger.warning("Для пачки не найдена пара (рассинхрон?)")
+
+        results_with_codes1 = [
+            result for result in relevant_results1 if len(result.qr_codes) != 0
+        ]
+        results_with_codes2 = [
+            result for result in relevant_results2 if len(result.qr_codes) != 0
+        ]
+
+        if len(results_with_codes1) != 0 and len(results_with_codes2) != 0:
+            logger.warning("QR- и штрихкоды обнаружены с обеих сторон пачки")
+
+        if len(results_with_codes1) == 0 and len(results_with_codes2) == 0:
+            logger.warning("QR- и штрихкодов нет с обеих сторон пачки")
             notify_that_no_packdata(domain_url)
         else:
-            notify_about_packdata(domain_url, success_result)
+            logger.debug("QR- и штрихкоды обнаружены")
+
+            barcodes = []
+            for codes in map(attrgetter('barcodes'), results_with_codes1):
+                barcodes.extend(codes)
+            for codes in map(attrgetter('barcodes'), results_with_codes2):
+                barcodes.extend(codes)
+
+            qr_codes = []
+            for codes in map(attrgetter('qr_codes'), results_with_codes1):
+                qr_codes.extend(codes)
+            for codes in map(attrgetter('qr_codes'), results_with_codes2):
+                qr_codes.extend(codes)
+
+            if overdue_result.expected_codes_count != len(qr_codes):
+                logger.warning(f"Ожидалось {overdue_result.expected_codes_count} кодов, "
+                               f"но в сопоставленной группе их оказалось {len(qr_codes)}")
+
+            notify_about_packdata(domain_url, barcodes=barcodes, qr_codes=qr_codes)
+
+        for result in relevant_results1 + relevant_results2:
+            result.is_paired = True
+        results1.popleft()
 
 
 def notify_about_packdata(
         domain_url: str,
-        result: TaskResult,
+        qr_codes: List[str],
+        barcodes: List[str],
 ):
     """
     Оповещает сервер, что QR- и штрихкоды успешно считаны с пачки.
@@ -209,7 +222,7 @@ def notify_about_packdata(
     success_pack_mapping = f'{domain_url}/api/v1_0/new_pack_after_pintset'
     REQUEST_TIMEOUT_SEC = 2
 
-    for qr_code, barcode in zip(result.qr_codes, result.barcodes):
+    for qr_code, barcode in zip(qr_codes, barcodes):
         send_data = {
             'qr': qr_code,
             'barcode': barcode,
@@ -223,7 +236,7 @@ def notify_about_packdata(
             logger.error("Аппликатор - нет Сети")
 
 
-def notify_that_no_packdata(domain_url: str):
+def notify_that_no_packdata(domain_url: str) -> None:
     """
     Оповещает сервер, что QR- и штрихкоды не были считаны с текущей пачки.
     """
@@ -235,9 +248,17 @@ def notify_that_no_packdata(domain_url: str):
         message = "Отправка извещения о пачке без данных на сервер"
         logger.debug(message)
 
+        # REMOVAL
+        # if get_work_mode(domain_url) == 'auto':
+        #     pass
+        # f = open ('line1time.txt', 'w')
+        # f.write(str(time.time()+delay))
+        # f.close()
+        # er.snmp_set(er.OID['ALARM-1'],er.on)
+
         # TODO: ниже (вместо warning'а) должен быть запрос к серверу для случая,
         #  когда с обеих сторон пачки не обнаружено кодов
-        logger.warning("ЗАПРОС НЕ РЕАЛИЗОВАН")
+        logger.warning("Пачка без данных")
 
     except Exception:
         logger.error("Аппликатор - нет Сети")
@@ -256,7 +277,7 @@ def get_work_mode(domain_url: str) -> Optional[str]:
         response = requests.get(wmode_mapping, timeout=REQUEST_TIMEOUT_SEC)
         wmode = response.json()['work_mode']
         return wmode
-    except Exception:
+    except ConnectTimeout:
         logger.error("Аппликатор - нет Сети")
         return None
 
@@ -265,18 +286,15 @@ def get_pack_codes_count(domain_url: str, prev_value: int) -> Optional[int]:
     """
     Узнаёт от сервера, сколько QR-кодов ожидать на одной пачке
     """
-    # TODO: ниже должен быть url для получения кол-ва qr-кодов с сервера
-    qr_count_mapping = f'{domain_url}/api/v1_0/!!__TODO_FILLME__!!'
+    qr_count_mapping = f'{domain_url}/api/v1_0/current_batch'
     REQUEST_TIMEOUT_SEC = 2
 
     try:
-        message = "Получение данных об ожидаемом кол-ве QR-кодов"
-        logger.debug(message)
+        logger.debug("Получение данных об ожидаемом кол-ве QR-кодов")
 
-        # TODO: ниже (вместо warning'а) должен быть запрос к серверу
-        #  для определения кол-ва кодов в пачке
-        logger.warning("ЗАПРОС НЕ РЕАЛИЗОВАН")
-        return 1
+        response = requests.get(qr_count_mapping, timeout=REQUEST_TIMEOUT_SEC)
+        packs_in_block = int(response.json()['params']['multipacks_after_pintset'])
+        return packs_in_block
 
     except Exception:
         logger.error("Аппликатор - нет Сети")
@@ -304,14 +322,54 @@ def run_parent_event_loop(
         queue=queue,
         processes_args=processes_args,
     )
-
     results_by_process_id: List[Deque[TaskResult]] = [
-        deque() for _, _ in enumerate(processes_args)
+        deque() for _ in processes_args
     ]
-
     expected_codes_count = 1
-
     iteration_count = 0
+
+    def process_taskresult(event: TaskResult):
+        msg = (f"Получены данные от процесса #{event.worker_id}: "
+               f"QR={event.qr_codes} "
+               f"BAR={event.barcodes} "
+               f"время конца пачки='{event.finish_time}'")
+        logger.debug(msg)
+        event.is_paired = False
+        event.expected_codes_count = expected_codes_count
+        enqueue_new_result(
+            results_by_process_id,
+            event,
+        )
+
+    def process_taskerror(event: TaskError):
+        msg = (f"В процессе #{event.worker_id} "
+               f"произошла ошибка: {event.message}")
+        logger.error(msg)
+
+    def process_startscanning(event: StartScanning):
+        msg = f"Процесс #{event.worker_id} начал сканирование"
+        logger.info(msg)
+
+    def process_endscanning(event: EndScanning):
+        msg = f"Процесс #{event.worker_id} завершил работу"
+        logger.info(msg)
+
+        process = processes[event.worker_id]
+        process.terminate()
+        process.join()
+        alive_count = sum(process.is_alive() for process in processes)
+        if alive_count == 0:
+            raise GeneratorExit("Все процессы завершили работу. Закрытие программы")
+
+    event_processor = EventProcessor()
+    event_processor.add_handler(process_taskresult)
+    event_processor.add_handler(process_taskerror)
+    event_processor.add_handler(process_startscanning)
+    event_processor.add_handler(process_endscanning)
+
+    def process_event(event: CamScannerEvent):
+        event_processor.process_event(event)
+
     while True:
         try:
             if iteration_count == 0:
@@ -319,18 +377,13 @@ def run_parent_event_loop(
             iteration_count = (iteration_count + 1) % ITERATION_PER_REQUEST
 
             try:
-                event: Type[CamScannerEvent] = queue.get(timeout=QUEUE_REQUEST_TIMEOUT_SEC)
+                event: CamScannerEvent = queue.get(timeout=QUEUE_REQUEST_TIMEOUT_SEC)
             except Empty:
                 continue
             event.receive_time = datetime.now()
 
-            process_event(
-                event,
-                results_by_process_id,
-                processes,
-                domain_url,
-                expected_codes_count,
-            )
+            process_event(event)
+            process_latest_results(results_by_process_id, domain_url)
 
         except KeyboardInterrupt:
             message = "Выполнение прервано пользователем. Закрытие!"
@@ -370,7 +423,7 @@ def main():
                    "В .env через ';' ожидается ровно 2 адреса для подключения.")
         raise ValueError(message)
 
-    logger.add(sink=log_path, level=log_level)
+    logger.add(sink=log_path, level=log_level, rotation='2 MB', compression='zip')
 
     # аргументы для worker_task (кроме queue и worker_id) для запуска в разных процессах
     processes_args = [

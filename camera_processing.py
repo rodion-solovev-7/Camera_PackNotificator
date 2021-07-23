@@ -1,3 +1,6 @@
+"""
+Работа с видео. Чтение QR- и штрихкодов.
+"""
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Dict, List, Any, Optional
@@ -8,7 +11,7 @@ from numpy import ndarray
 from tensorflow.lite.python.interpreter import Interpreter
 
 from recognition import ORIG_X, ORIG_Y, dummy_codes
-from worker_events import TaskResult, CamScannerEvent, TaskError, EndScanning, StartScanning
+from events import TaskResult, CamScannerEvent, TaskError, EndScanning, StartScanning
 
 
 @dataclass(unsafe_hash=True)
@@ -67,10 +70,8 @@ class ImagePackScanner:
     @staticmethod
     def read_codes(image: ndarray) -> ImagePackData:
         """Читает QR- и штрихкод с изображения."""
-        width, height = image.shape[1], image.shape[0]
-
         try:
-            barcode, qr_code = dummy_codes([image], width, height, 0.4)
+            barcode, qr_code = dummy_codes([image], 0.4)
             barcode = barcode if barcode != '' else None
             qr_code = qr_code if qr_code != '' else None
             return ImagePackData(barcode=barcode, qr_code=qr_code)
@@ -167,11 +168,39 @@ def get_events(
     FRAMES_PER_CHECK = 15
 
     last_correct_barcode: Optional[str] = None
-    # список пар QR- и шрихкодов (именно в таком порядке)
+    """Последний считанный штрихкод. Как правило, не меняется."""
     images_packdata: List[ImagePackData] = []
+    """Список QR- и шрихкодов, считанных с идущей сейчас пачки."""
+
+    PACK_VISIBLE_MAX = 1
+    """
+    Пороговое значение, при достижении которого 
+    флаг видимости пачки устанавливается в ``True``.
+    """
+
+    PACK_VISIBLE_MIN = -2
+    """
+    Пороговое значение, при достижении которого 
+    флаг видимости пачки устанавливается в ``False``.
+    """
+
+    pack_visible_count = 0
+    """
+    Счётчик срабатываний "видимости" пачки подряд.
+
+    Значение всегда находится в диапазоне [``PACK_VISIBLE_MIN``; ``PACK_VISIBLE_MAX``].
+    Если значение меньше нуля, то пачка не была замечена |N| раз подряд. 
+    Если значение больше нуля, то пачка была замечена N раз подряд.
+    При смене состояния "замечена" <-> "на замечена", 
+    счётчик обнуляется и начинает считать заново.
+
+    Отвечает за переключения флага видимости.
+    """
 
     is_pack_visible_now = False
+    """Замечена ли пачка сейчас"""
     is_pack_visible_before = False
+    """Была ли ранее замечена пачка"""
 
     yield StartScanning(finish_time=datetime.now())
 
@@ -190,7 +219,18 @@ def get_events(
 
         frame_counter = (frame_counter + 1) % FRAMES_PER_CHECK
         if frame_counter == 0:
-            is_pack_visible_now = image_scanner.is_pack_exists(image)
+            if image_scanner.is_pack_exists(image):
+                pack_visible_count = max(pack_visible_count, 0) + 1
+            else:
+                pack_visible_count = min(pack_visible_count, 0) - 1
+            pack_visible_count = min(pack_visible_count, PACK_VISIBLE_MAX)
+            pack_visible_count = max(pack_visible_count, PACK_VISIBLE_MIN)
+
+            # флаг видимости пачки меняется только когда пачка была
+            if pack_visible_count == PACK_VISIBLE_MAX:
+                is_pack_visible_now = True
+            elif pack_visible_count == PACK_VISIBLE_MIN:
+                is_pack_visible_now = False
 
         if not is_pack_visible_now and not is_pack_visible_before:
             # пачки не видно сейчас и не было видно до этого, ждём

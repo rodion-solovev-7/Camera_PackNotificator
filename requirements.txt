@@ -5,3 +5,4 @@ opencv-python~=4.5.3.56
 requests~=2.26.0
 python-dotenv~=0.18.0
 loguru~=0.5.3
+numba~=0.53.1
