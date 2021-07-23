@@ -14,6 +14,7 @@ from worker_events import TaskResult, CamScannerEvent, TaskError, EndScanning, S
 @dataclass(unsafe_hash=True)
 class ImagePackData:
     """
+    Структура для хранения считанных с изображения данных.
     Содержит считанные с изображения QR-код и шрих-код.
 
     Коды содержатся в единственном экземпляре (не списки!).
@@ -81,11 +82,10 @@ class ImagePackScanner:
 
 class ImagesSource:
     """
-    Обёртка над источником изображений.
-    Инкапсулирует в себе видеопоток и переподключение к нему.
+    Обёртка над видеопотоком.
+    Берёт на себя ответственность за переподключение и освобождение ресурсов.
     Позволяет получать изображения из источника.
     """
-
     def __init__(self, video_url: str):
         self.video_url = video_url
         self.video: Optional[VideoCapture]
@@ -128,6 +128,8 @@ class ImagesSource:
 
         if not is_image_exists:
             self.release_resourses()
+            self.connect_to_video()
+
             message = "Подключение к источнику видео прервано!"
             raise RuntimeError(message)
 
@@ -159,7 +161,6 @@ def get_events(
     """
     Бесконечный итератор, возвращающий события с камеры-сканера.
     """
-
     images_source = ImagesSource(video_url)
     image_scanner = ImagePackScanner(model_path)
 
@@ -172,10 +173,7 @@ def get_events(
     is_pack_visible_now = False
     is_pack_visible_before = False
 
-    yield StartScanning(
-        message="Начало работы",
-        finish_time=datetime.now(),
-    )
+    yield StartScanning(finish_time=datetime.now())
 
     frame_counter = 0
     while True:
@@ -227,7 +225,5 @@ def get_events(
             images_packdata.clear()
             continue
 
-    yield EndScanning(
-        message="Завершение работы",
-        finish_time=datetime.now(),
-    )
+    images_source.release_resourses()
+    yield EndScanning(finish_time=datetime.now())
