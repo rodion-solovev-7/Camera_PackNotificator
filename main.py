@@ -19,6 +19,8 @@ def worker_task(
         worker_id: int,
         video_url: str,
         model_path: str,
+        display_window: bool,
+        auto_reconnect: bool,
 ) -> None:
     """
     Метод для запуска в отдельном процессе.
@@ -34,13 +36,13 @@ def worker_task(
 
     events: Iterable[CamScannerEvent]
     events = get_events(
-        video_url,
-        model_path,
-        display=True,
-        auto_reconnect=True,
+        video_url=video_url,
+        model_path=model_path,
+        display_window=display_window,
+        auto_reconnect=auto_reconnect,
     )
 
-    # бесконечный цикл, который получает коды с конкретной камеры
+    # бесконечный цикл, который получает события от конкретной камеры
     start_time = datetime.now()
     for event in events:
         event.worker_id = worker_id
@@ -209,7 +211,7 @@ def notify_that_no_packdata(logger: Logger, domain_url: str):
         logger.error("Аппликатор - нет Сети")
 
 
-def get_work_mode_from_server(logger: Logger, domain_url: str) -> Optional[str]:
+def get_work_mode(logger: Logger, domain_url: str) -> Optional[str]:
     """
     Получает режим работы (в оригинале "записи"!?) с сервера.
     """
@@ -227,7 +229,7 @@ def get_work_mode_from_server(logger: Logger, domain_url: str) -> Optional[str]:
         return None
 
 
-def get_codes_count_in_pack_from_server(logger: Logger, domain_url: str) -> Optional[int]:
+def get_pack_codes_count(logger: Logger, domain_url: str) -> Optional[int]:
     """
     Узнаёт от сервера, сколько QR-кодов ожидать на одной пачке
     """
@@ -249,13 +251,13 @@ def get_codes_count_in_pack_from_server(logger: Logger, domain_url: str) -> Opti
         return None
 
 
-def parent_event_loop(
+def run_parent_event_loop(
         logger: Logger,
         processes_args: List[tuple],
         domain_url: str,
 ):
     """
-    Запускает процессы с обработкой QR- и штрихкоды,
+    Запускает процессы обработки QR- и штрихкодов с камер,
     открывает блокирующий событийный цикл для обработки приходящих от них событий.
 
     Отлавливает и логгирует доходящие до него некритичные исключения.
@@ -282,7 +284,7 @@ def parent_event_loop(
     while True:
         try:
             if iteration_count == 0:
-                expected_codes_count = get_codes_count_in_pack_from_server(logger, domain_url)
+                expected_codes_count = get_pack_codes_count(logger, domain_url)
             iteration_count = (iteration_count + 1) % ITERATION_PER_REQUEST
 
             try:
@@ -318,8 +320,13 @@ def main():
     log_level = os.getenv('LOG_LEVEL')
     model_path = os.getenv('MODEL_PATH')
     domain_url = os.getenv('DOMAIN_URL')
-    video_urls_line = os.getenv('VIDEO_URLS')
-    video_urls = video_urls_line.split(';')
+    video_urls = os.getenv('VIDEO_URLS')
+    display_window = os.getenv('DISPLAY_WINDOW', '1')
+    auto_reconnect = os.getenv('AUTO_RECONNECT', '1')
+
+    video_urls = video_urls.split(';')
+    display_window = int(display_window) == 1
+    auto_reconnect = int(auto_reconnect) == 1
 
     if len(video_urls) != 2:
         message = ("Данная программа рассчитана на 2 камеры. "
@@ -331,11 +338,16 @@ def main():
 
     # аргументы для worker_task (кроме queue и worker_id) для запуска в разных процессах
     processes_args = [
-        (video_url, model_path) for video_url in video_urls
+        (
+            video_url,
+            model_path,
+            display_window,
+            auto_reconnect,
+        ) for video_url in video_urls
     ]
 
     try:
-        parent_event_loop(logger, processes_args, domain_url)
+        run_parent_event_loop(logger, processes_args, domain_url)
     except BaseException as e:
         message = "Падение с критической ошибкой"
         logger.critical(msg=message, exc_info=e)

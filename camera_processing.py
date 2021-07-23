@@ -92,7 +92,7 @@ class ImagesSource:
         self.connect_to_video()
 
     @staticmethod
-    def display_in_window(image: ndarray) -> None:
+    def show(image: ndarray) -> None:
         """
         Рендерит текущий кадр из видео.
         Позволяет в реальном времени видеть обрабатываемое видео.
@@ -132,7 +132,7 @@ class ImagesSource:
             raise RuntimeError(message)
 
         if display:
-            self.display_in_window(image)
+            self.show(image)
 
         return image
 
@@ -153,7 +153,7 @@ def get_prepared_packdata_list(images_packdata: List[ImagePackData]) -> List[Ima
 def get_events(
         video_url: str,
         model_path: str,
-        display: bool = True,
+        display_window: bool = True,
         auto_reconnect: bool = True,
 ) -> Iterable[CamScannerEvent]:
     """
@@ -180,7 +180,7 @@ def get_events(
     frame_counter = 0
     while True:
         try:
-            image = images_source.get_image(display=display)
+            image = images_source.get_image(display=display_window)
         except RuntimeError as e:
             yield TaskError(
                 message=str(e),
