@@ -1,8 +1,9 @@
-numpy~=1.21.0
+numpy~=1.19.2
 tensorflow~=2.5.0
 pyzbar~=0.1.8
 opencv-python~=4.5.3.56
 requests~=2.26.0
 python-dotenv~=0.18.0
 loguru~=0.5.3
-numba~=0.53.1
+pysnmp~=4.4.12
+scikit-image~=0.18.2

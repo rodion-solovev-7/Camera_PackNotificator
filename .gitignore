@@ -1,7 +1,6 @@
 /venv/
 /without-qr.mp4
 /with-qr.mp4
-/CameraScanners.log
-/81465-video.mp4
+logs/*
 __pycache__/
 .idea/
