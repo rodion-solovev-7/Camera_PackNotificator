@@ -15,6 +15,12 @@ from typing import Optional
 
 from .handling import BaseEvent
 
+__all__ = [
+    'BaseEvent', 'CamScannerEvent', 'TaskError', 'CameraPackResult',
+    'EndScanning', 'StartScanning', 'PackWithCodes', 'PackBadCodes',
+    'OpenShutter', 'CloseShutter', 'UpdateExpectedCodesCount',
+]
+
 
 @dataclass
 class CamScannerEvent(BaseEvent):
@@ -42,12 +48,10 @@ class CameraPackResult(CamScannerEvent):
     expected_codes_count: Optional[int] = None
 
 
-@dataclass
 class EndScanning(CamScannerEvent):
     """Завершение сканирования"""
 
 
-@dataclass
 class StartScanning(CamScannerEvent):
     """Начало сканирования"""
 
@@ -63,8 +67,29 @@ class PackWithCodes(BaseEvent):
     barcodes: list[str] = field(default_factory=list)
 
 
-@dataclass
 class PackBadCodes(BaseEvent):
     """
     Конечный результат с пачки, на которой не было обнаружено кодов
     """
+
+
+class OpenShutter(BaseEvent):
+    """
+    Запрос на открытие шторки для отправки пачек на сброс
+    """
+
+
+@dataclass
+class CloseShutter(BaseEvent):
+    """
+    Запрос на закрытие шторки для остановки сброса пачек
+    """
+    close_time: datetime
+
+
+@dataclass
+class UpdateExpectedCodesCount(BaseEvent):
+    """
+    Получение ожидаемого кол-ва кодов с сервера
+    """
+    update_time: datetime

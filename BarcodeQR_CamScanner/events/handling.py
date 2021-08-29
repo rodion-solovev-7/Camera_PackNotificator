@@ -1,9 +1,9 @@
 import abc
+from collections import deque
 from inspect import signature
-from typing import Callable
+from typing import Callable, Optional, Iterable
 
-
-__all__ = ['BaseEvent', 'EventProcessor']
+__all__ = ['BaseEvent', 'EventProcessor', 'EventsProcessingQueue']
 
 
 class BaseEvent(metaclass=abc.ABCMeta):
@@ -33,7 +33,7 @@ class EventProcessor:
             raise ValueError(message)
         self.handlers.append(handler)
 
-    def process_event(self, event: BaseEvent) -> None:
+    def process_event(self, event: BaseEvent) -> Optional[Iterable[BaseEvent]]:
         """
         Обрабатывает событие поступившее на вход.
         К событию будут применены все добавленные подходящие ему обработчики
@@ -45,7 +45,9 @@ class EventProcessor:
         handler_types = map(self._get_handler_eventtype, self.handlers)
         for handler_type, handler in zip(handler_types, self.handlers):
             if isinstance(event, handler_type):
-                handler(event)
+                results = handler(event)
+                if results is not None:
+                    yield from results
 
     @staticmethod
     def _get_handler_eventtype(handler: Callable) -> type:
@@ -77,3 +79,38 @@ class EventProcessor:
             raise ValueError(message)
 
         return event_type
+
+
+class EventsProcessingQueue:
+    """Очередь для событий, ожидающих своей обработки"""
+
+    def __init__(self, event_processor: EventProcessor):
+        self._queue = deque()
+        self._processor = event_processor
+
+    def _process_event(self, event: BaseEvent):
+        result = self._processor.process_event(event)
+
+        if result is None:
+            return
+        elif result is Iterable:
+            events = result
+            for event in events:
+                self.add_event(event)
+        elif result is BaseEvent:
+            event = result
+            self.add_event(event)
+
+    def process_latest(self):
+        event = self.pop_latest()
+        if event is None:
+            return
+        self._process_event(event)
+
+    def add_event(self, event: BaseEvent):
+        self._queue.append(event)
+
+    def pop_latest(self) -> Optional[BaseEvent]:
+        if len(self._queue) == 0:
+            return None
+        return self._queue.popleft()

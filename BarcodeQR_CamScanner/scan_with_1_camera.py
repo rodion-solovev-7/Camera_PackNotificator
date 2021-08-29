@@ -1,24 +1,51 @@
 import os
+from datetime import datetime, timedelta
+from multiprocessing import Queue, Process
+from queue import Empty
+from typing import Iterable, Optional
 
 from loguru import logger
 
-from .communication.signals import get_pack_codes_count, notify_about_packdata, notify_bad_packdata
-from .event_system.events import *
-from .event_system.handling import EventProcessor
+from .communication.signals import (get_pack_codes_count, notify_about_packdata,
+                                    send_shutter_down, send_shutter_up)
+from .events import *
+from .events.handling import EventProcessor, EventsProcessingQueue
 from .packs_processing import InstantCameraProcessingQueue
-from .video_processing import get_events_from_video
+from .video_processing import CameraScannerProcess
 
 
 class RunnerWith1Camera:
     def __init__(self, camera_args: tuple, domain_url: str):
+        self._queue = Queue()
         self._event_processor = EventProcessor()
-        self._processing_queue = InstantCameraProcessingQueue()
+        self._cam_validating_queue = InstantCameraProcessingQueue()
         self._domain_url = domain_url
         self._expected_codes_count = 2
-        self._iter_modcounter = 0
         self._camera_args = camera_args
+        self._processes = self._get_processes([camera_args])
 
         self._init_event_processor()
+
+        self._event_processing_queue = EventsProcessingQueue(self._event_processor)
+
+    def _get_processes(self, processes_args) -> list[Process]:
+        """Инициализирует и возвращает процессы"""
+        processes = [CameraScannerProcess(self._queue, worker_id, *args)
+                     for worker_id, args in enumerate(processes_args)]
+        return processes
+
+    def _run_processes(self) -> None:
+        """Запускает процессы"""
+        for process in self._processes:
+            process.start()
+
+    def _kill_processes(self) -> None:
+        """Убивает процессы"""
+        for process in self._processes:
+            if not process.is_alive():
+                continue
+            process.terminate()
+            process.join()
 
     def _init_event_processor(self):
         handlers = [
@@ -26,20 +53,19 @@ class RunnerWith1Camera:
             self._process_taskerror,
             self._process_startscanning,
             self._process_endscanning,
-            self._process_packwithcodes,
             self._process_packbadcodes,
+            self._process_packwithcodes,
         ]
         for handler in handlers:
             self._event_processor.add_handler(handler)
 
-    def _update_expected_codes_count(self) -> None:
-        ITERATION_PER_REQUEST = 15
-        if self._iter_modcounter != 0:
-            return
-        new_codes_count = get_pack_codes_count(self._domain_url)
-        if new_codes_count is not None:
-            self.expected_codes_count = new_codes_count
-        self._iter_modcounter = (self._iter_modcounter + 1) % ITERATION_PER_REQUEST
+    def _get_event_from_cam(self) -> Optional[CamScannerEvent]:
+        QUEUE_REQUEST_TIMEOUT_SEC = 1.5
+        try:
+            event = self._queue.get(timeout=QUEUE_REQUEST_TIMEOUT_SEC)
+            return event
+        except Empty:
+            return None
 
     def mainloop_with_lock(self) -> None:
         """
@@ -50,27 +76,26 @@ class RunnerWith1Camera:
 
         Завершается при ``KeyboardInterrupt`` (Ctrl+C в терминале)
         """
-        events_from_cam = get_events_from_video(*self._camera_args)
 
-        for new_event in events_from_cam:
+        # TODO: инициализировать стартовые события здесь
+
+        while True:
             try:
-                self._update_expected_codes_count()
-                self._event_processor.process_event(new_event)
+                # тут происходит обработка событий из списка с событиями
+                # - вызывается подходящий метод self._process_*Событие*
+                # и создаются новые события
+                self._event_processing_queue.process_latest()
 
-                events = list(self._processing_queue.get_processed_latest())
-                for event in events:
-                    # тут происходит обработка событий из списка с событиями
-                    # - вызывается подходящий метод self._process_*Событие*
-                    self._event_processor.process_event(event)
-
-            except KeyboardInterrupt as e:
-                logger.info(f"Выполнение прервано {e}")
-                break
             except Exception as e:
                 logger.exception("Неотловленное исключение")
                 logger.opt(exception=e)
 
-    def _process_camerapackresult(self, event: CameraPackResult):
+    def _update_expected_codes_count(self) -> None:
+        new_codes_count = get_pack_codes_count(self._domain_url)
+        if new_codes_count is not None:
+            self.expected_codes_count = new_codes_count
+
+    def _process_camerapackresult(self, event: CameraPackResult) -> None:
         msg = (f"Получены данные от камеры: "
                f"QR={event.qr_codes} "
                f"BAR={event.barcodes} "
@@ -78,33 +103,62 @@ class RunnerWith1Camera:
         logger.debug(msg)
         event.receive_time = datetime.now()
         event.expected_codes_count = self._expected_codes_count
-        self._processing_queue.enqueue(event)
+        self._cam_validating_queue.enqueue(event)
+        yield from self._cam_validating_queue.get_processed_latest()
+
+    def _process_update_expected_codes_count(
+            self,
+            event: UpdateExpectedCodesCount,
+    ) -> Iterable[UpdateExpectedCodesCount]:
+        now = datetime.now()
+        if now >= event.update_time:
+            self._update_expected_codes_count()
+            update_time = datetime.now() + timedelta(seconds=10)
+            yield UpdateExpectedCodesCount(update_time=update_time)
+        else:
+            yield event
 
     @staticmethod
-    def _process_taskerror(event: TaskError):
-        event.receive_time = datetime.now()
+    def _process_taskerror(event: TaskError) -> None:
         logger.error(f"При сканировании произошла ошибка: {event.message}")
 
+    # noinspection PyUnusedLocal
     @staticmethod
-    def _process_startscanning(event: StartScanning):
-        event.receive_time = datetime.now()
+    def _process_startscanning(event: StartScanning) -> None:
         logger.info(f"Процесс начал сканирование")
 
+    # noinspection PyUnusedLocal
     @staticmethod
-    def _process_endscanning(event: EndScanning):
-        event.receive_time = datetime.now()
+    def _process_endscanning(event: EndScanning) -> None:
         logger.info(f"Процесс завершил работу")
 
-    # noinspection PyUnusedLocal
-    def _process_packbadcodes(self, event: PackBadCodes):
-        notify_bad_packdata(self._domain_url)
-
-    def _process_packwithcodes(self, event: PackWithCodes):
+    def _process_packwithcodes(self, event: PackWithCodes) -> None:
         notify_about_packdata(
             self._domain_url,
             barcodes=event.barcodes,
             qr_codes=event.qr_codes,
         )
+
+    # noinspection PyUnusedLocal
+    @staticmethod
+    def _process_packbadcodes(event: PackBadCodes) -> Iterable[BaseEvent]:
+        yield OpenShutter()
+        close_time = datetime.now() + timedelta(seconds=16)
+        yield CloseShutter(close_time=close_time)
+
+    # noinspection PyUnusedLocal
+    @staticmethod
+    def _process_open_discard(event: OpenShutter) -> None:
+        send_shutter_down()
+
+    # noinspection PyUnusedLocal
+    @staticmethod
+    def _process_close_discard(event: CloseShutter) -> Iterable[CloseShutter]:
+        now = datetime.now()
+        if now >= event.close_time:
+            send_shutter_up()
+        else:
+            yield event
 
 
 def setup_logger():
@@ -145,6 +199,8 @@ def run():
     try:
         runner = RunnerWith1Camera(processes_args, domain_url)
         runner.mainloop_with_lock()
+    except KeyboardInterrupt as e:
+        logger.info(f"Выполнение прервано {e}")
     except BaseException as e:
         logger.critical("Падение с критической ошибкой")
         logger.opt(exception=e)

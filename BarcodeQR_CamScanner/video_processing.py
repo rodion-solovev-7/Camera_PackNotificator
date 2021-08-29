@@ -1,13 +1,15 @@
 """
 Функции для работы с видеопотоком: чтение QR- и штрихкодов, распознавание наличия пачки
 """
+from datetime import datetime
+import multiprocessing as mp
 from typing import Iterable
 
 import cv2
 import numpy as np
 
 from .code_reading import get_codes_from_image, CodeType
-from .event_system.events import *
+from .events import *
 from .pack_recognition.recognizers import BSPackRecognizer
 
 
@@ -41,6 +43,12 @@ def _get_images_from_source(
     cv2.destroyAllWindows()
 
 
+def _resize_image(image: np.ndarray, sizer: float) -> np.ndarray:
+    """Меняет размер изображения не изменяя соотношения"""
+    shape = tuple(int(v * sizer) for v in image.shape[:2])
+    return cv2.resize(image, shape[::-1])
+
+
 def get_events_from_video(
         video_url: str,
         display_window: bool = True,
@@ -52,6 +60,7 @@ def get_events_from_video(
     """
     pack_recognizer = BSPackRecognizer(*recognizer_args)
 
+    # noinspection PyUnusedLocal
     is_pack_visible_before = False
     """Была ли ранее замечена пачка"""
     is_pack_visible_now = False
@@ -103,7 +112,53 @@ def get_events_from_video(
     yield EndScanning(finish_time=datetime.now())
 
 
-def _resize_image(image: np.ndarray, sizer: float) -> np.ndarray:
-    """Меняет размер изображения не изменяя соотношения"""
-    shape = tuple(int(v * sizer) for v in image.shape[:2])
-    return cv2.resize(image, shape[::-1])
+class CameraScannerProcess(mp.Process):
+    """
+    Процесс - обработчик событий с камеры.
+    Общается с управляющим процессом через ``queue``.
+    """
+
+    def __init__(self, *args):
+        super().__init__(
+            target=self.task,
+            args=tuple(args),
+            daemon=True
+        )
+
+    @staticmethod
+    def task(
+            queue: mp.Queue,
+            worker_id: int,
+            video_url: str,
+            display_window: bool,
+            auto_reconnect: bool,
+            recognizer_args: tuple,
+    ) -> None:
+        """
+        Метод для запуска в отдельном процессе.
+
+        Бесконечное читает QR-, штрихкоды с выбранной камеры
+        и отправляет их данные базовому процессу через ``queue``.
+
+        Кладёт в ``queue`` следующие события-наследники от ``CamScannerEvent``:
+
+        - В случае ошибок экземпляр ``TaskError`` с информацией об ошибке.
+        - В случае успешной обработки экземпляр ``CameraPackResult`` со считанными данными.
+        """
+        try:
+            events = get_events_from_video(
+                video_url=video_url,
+                display_window=display_window,
+                auto_reconnect=auto_reconnect,
+                recognizer_args=recognizer_args,
+            )
+
+            # бесконечный цикл, который получает события от камеры и кладёт их в очередь
+            for event in events:
+                event.worker_id = worker_id
+                event.receive_time = None
+
+                # отправка события основному процессу
+                queue.put(event)
+        except KeyboardInterrupt:
+            pass

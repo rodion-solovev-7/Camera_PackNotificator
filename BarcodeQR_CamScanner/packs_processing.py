@@ -3,13 +3,12 @@
 """
 import abc
 from collections import deque
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import Iterable
 
 from loguru import logger
 
-from .event_system.events import *
-from .event_system.handling import BaseEvent
+from .events import *
 
 
 class BaseResultProcessingQueue(metaclass=abc.ABCMeta):
@@ -42,7 +41,7 @@ class Interval2CamerasProcessingQueue(BaseResultProcessingQueue):
     RESULT_TIMEOUT_TIME: timedelta
     _queue: deque[CameraPackResult]
 
-    RESULT_TIMEOUT_TIME = timedelta(seconds=20)
+    RESULT_TIMEOUT_TIME = timedelta(seconds=2)
     """
     Время, после которого результат сопоставляется с другими,
     а затем удаляется из очереди.
@@ -154,7 +153,7 @@ class InstantCameraProcessingQueue(BaseResultProcessingQueue):
                 processed.append(PackBadCodes())
                 continue
 
-            if len(barcodes) == 0:
+            elif len(barcodes) == 0:
                 logger.debug("Пачка с QR кодами, но без штрихкодов")
                 processed.append(PackBadCodes())
                 continue

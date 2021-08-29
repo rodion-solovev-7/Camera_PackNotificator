@@ -1,17 +1,43 @@
 """
-Функциями для отправки результатов работы
+Функции для отправки результатов работы
 программам извне и получению информации от них.
 """
 from json import JSONDecodeError
+from time import sleep
 from typing import List, Optional
 
 import requests
-from requests.exceptions import RequestException
 from loguru import logger
+from requests.exceptions import RequestException
 
 from . import _snmp_commands
 
 REQUEST_TIMEOUT_SEC = 2
+SHUTTER_OPEN_TIME_SEC = 16
+
+
+def _shutter_task() -> None:
+    """Сбрасывает бракованную пачку с конвейера"""
+    global SHUTTER_OPEN_TIME_SEC
+    send_shutter_down()
+    sleep(SHUTTER_OPEN_TIME_SEC)
+    send_shutter_up()
+
+
+def send_shutter_down() -> None:
+    """Опускает шторку для начала сброса пачек"""
+    try:
+        _snmp_commands.snmp_set(_snmp_commands.OID['ALARM-1'], _snmp_commands.on)
+    except Exception:
+        logger.error("Ошибка при отправлении запроса на опускание шторки")
+
+
+def send_shutter_up() -> None:
+    """Поднимает шторку для прекращения сброса пачек"""
+    try:
+        _snmp_commands.snmp_set(_snmp_commands.OID['ALARM-1'], _snmp_commands.off)
+    except Exception:
+        logger.error("Ошибка при отправлении запроса на поднятие шторки")
 
 
 def notify_about_packdata(
@@ -40,21 +66,6 @@ def notify_about_packdata(
         except RequestException as e:
             logger.error("Ошибка при попытке отправки кодов на сервер")
             logger.opt(exception=e)
-
-
-def notify_bad_packdata(domain_url: str) -> None:
-    """
-    Оповещает сервер, что QR- и штрихкоды не были считаны с текущей пачки.
-    """
-    logger.debug("Отправка извещения о некорректной пачке")
-
-    if get_work_mode(domain_url) == 'auto':
-        return None
-
-    # TODO: разобраться в функции ниже (и всём модуле тоже),
-    #  проверить исключения
-
-    _snmp_commands.snmp_set(_snmp_commands.OID['ALARM-1'], _snmp_commands.on)
 
 
 def get_work_mode(domain_url: str) -> Optional[str]:
