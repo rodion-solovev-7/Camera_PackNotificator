@@ -7,10 +7,12 @@ from typing import Optional
 from loguru import logger
 
 from .communication.signals import (get_pack_codes_count, notify_about_packdata,
-                                    send_shutter_down, send_shutter_up)
+                                    send_shutter_down, send_shutter_up,
+                                    SHUTTER_BEFORE_TIME_SEC, SHUTTER_OPEN_TIME_SEC)
 from .events import *
 from .events.handling import *
-from .packs_processing import InstantCameraProcessingQueue, Interval2CamerasProcessingQueue
+from .packs_validation import (Interval2CamerasProcessingQueue,
+                               BaseResultProcessingQueue)
 from .video_processing import CameraScannerProcess
 
 
@@ -23,9 +25,14 @@ class SingleCameraWorker(EventWorker):
         Wait(),
     ]
 
-    def __init__(self, cameras_args: list[tuple], domain_url: str):
+    def __init__(
+            self,
+            cameras_args: list[tuple],
+            domain_url: str,
+            cam_validating_queue: BaseResultProcessingQueue,
+    ):
         self._queue = mp.Queue()
-        self._cam_validating_queue = InstantCameraProcessingQueue()
+        self._cam_validating_queue = cam_validating_queue
         self._domain_url = domain_url
         self._expected_codes_count = 2
         self._cameras_args = cameras_args[:1]
@@ -109,16 +116,16 @@ class SingleCameraWorker(EventWorker):
         update_time = datetime.now() + timedelta(seconds=10)
         return UpdateExpectedCodesCount(update_time=update_time)
 
-    @staticmethod
-    def _process_TaskError(event: TaskError) -> None:
+    # noinspection PyMethodMayBeStatic
+    def _process_TaskError(self, event: TaskError) -> None:
         logger.error(f"При сканировании произошла ошибка: {event.message}")
 
-    @staticmethod
-    def _process_StartScanning(event: StartScanning) -> None:
+    # noinspection PyMethodMayBeStatic
+    def _process_StartScanning(self, event: StartScanning) -> None:
         logger.info(f"Процесс #{event.worker_id} начал сканирование")
 
-    @staticmethod
-    def _process_EndScanning(event: EndScanning) -> None:
+    # noinspection PyMethodMayBeStatic
+    def _process_EndScanning(self, event: EndScanning) -> None:
         logger.info(f"Процесс #{event.worker_id} завершил работу")
 
     def _process_PackWithCodes(self, event: PackWithCodes) -> None:
@@ -128,6 +135,12 @@ class SingleCameraWorker(EventWorker):
             qr_codes=event.qr_codes,
         )
 
+    # noinspection PyUnusedLocal,PyMethodMayBeStatic
+    def _process_PackBadCodes(self, event: PackBadCodes) -> tuple[OpenGate, CloseGate]:
+        open_time = datetime.now() + timedelta(seconds=SHUTTER_BEFORE_TIME_SEC)
+        close_time = datetime.now() + timedelta(seconds=SHUTTER_OPEN_TIME_SEC)
+        return OpenGate(open_time=open_time), CloseGate(close_time=close_time)
+
     def _process_ReadEventFromProcessQueue(
             self,
             event: ReadEventFromProcessQueue,
@@ -135,22 +148,15 @@ class SingleCameraWorker(EventWorker):
         new_event = self._get_event_from_cam()
         return event, new_event
 
-    # noinspection PyUnusedLocal
-    @staticmethod
-    def _process_PackBadCodes(event: PackBadCodes) -> tuple[OpenGate, CloseGate]:
-        open_time = datetime.now() + timedelta(seconds=2)
-        close_time = datetime.now() + timedelta(seconds=16)
-        return OpenGate(open_time=open_time), CloseGate(close_time=close_time)
-
-    @staticmethod
-    def _process_OpenGate(event: OpenGate) -> Optional[OpenGate]:
+    # noinspection PyMethodMayBeStatic
+    def _process_OpenGate(self, event: OpenGate) -> Optional[OpenGate]:
         now = datetime.now()
         if now < event.open_time:
             return event
         send_shutter_down()
 
-    @staticmethod
-    def _process_CloseGate(event: CloseGate) -> Optional[CloseGate]:
+    # noinspection PyMethodMayBeStatic
+    def _process_CloseGate(self, event: CloseGate) -> Optional[CloseGate]:
         now = datetime.now()
         if now < event.close_time:
             return event
@@ -165,11 +171,11 @@ class SingleCameraWorker(EventWorker):
         results = self._cam_validating_queue.get_processed_latest()
         read_time = now + timedelta(seconds=8)
         event = ReadResultsFromValidationQueue(read_time=read_time)
-        return results + [event]
+        return list(results) + [event]
 
-    @staticmethod
-    def _process_Wait(event: Wait) -> Wait:
-        sleep(5)
+    # noinspection PyMethodMayBeStatic
+    def _process_Wait(self, event: Wait) -> Wait:
+        sleep(1)
         return event
 
 
@@ -268,16 +274,16 @@ class DuoCamerasWorker(EventWorker):
         update_time = datetime.now() + timedelta(seconds=10)
         return UpdateExpectedCodesCount(update_time=update_time)
 
-    @staticmethod
-    def _process_TaskError(event: TaskError) -> None:
+    # noinspection PyMethodMayBeStatic
+    def _process_TaskError(self, event: TaskError) -> None:
         logger.error(f"При сканировании произошла ошибка: {event.message}")
 
-    @staticmethod
-    def _process_StartScanning(event: StartScanning) -> None:
+    # noinspection PyMethodMayBeStatic
+    def _process_StartScanning(self, event: StartScanning) -> None:
         logger.info(f"Процесс #{event.worker_id} начал сканирование")
 
-    @staticmethod
-    def _process_EndScanning(event: EndScanning) -> None:
+    # noinspection PyMethodMayBeStatic
+    def _process_EndScanning(self, event: EndScanning) -> None:
         logger.info(f"Процесс #{event.worker_id} завершил работу")
 
     def _process_PackWithCodes(self, event: PackWithCodes) -> None:
@@ -294,22 +300,21 @@ class DuoCamerasWorker(EventWorker):
         new_event = self._get_event_from_cam()
         return event, new_event
 
-    # noinspection PyUnusedLocal
-    @staticmethod
-    def _process_PackBadCodes(event: PackBadCodes) -> tuple[OpenGate, CloseGate]:
+    # noinspection PyUnusedLocal,PyMethodMayBeStatic
+    def _process_PackBadCodes(self, event: PackBadCodes) -> tuple[OpenGate, CloseGate]:
         open_time = datetime.now() + timedelta(seconds=2)
         close_time = datetime.now() + timedelta(seconds=16)
         return OpenGate(open_time=open_time), CloseGate(close_time=close_time)
 
-    @staticmethod
-    def _process_OpenGate(event: OpenGate) -> Optional[OpenGate]:
+    # noinspection PyMethodMayBeStatic
+    def _process_OpenGate(self, event: OpenGate) -> Optional[OpenGate]:
         now = datetime.now()
         if now < event.open_time:
             return event
         send_shutter_down()
 
-    @staticmethod
-    def _process_CloseGate(event: CloseGate) -> Optional[CloseGate]:
+    # noinspection PyMethodMayBeStatic
+    def _process_CloseGate(self, event: CloseGate) -> Optional[CloseGate]:
         now = datetime.now()
         if now < event.close_time:
             return event
@@ -327,7 +332,7 @@ class DuoCamerasWorker(EventWorker):
         event = ReadResultsFromValidationQueue(read_time=read_time)
         return results + [event]
 
-    @staticmethod
-    def _process_Wait(event: Wait) -> Wait:
-        sleep(5)
+    # noinspection PyMethodMayBeStatic
+    def _process_Wait(self, event: Wait) -> Wait:
+        sleep(1)
         return event

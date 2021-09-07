@@ -3,7 +3,6 @@
 программам извне и получению информации от них.
 """
 from json import JSONDecodeError
-from time import sleep
 from typing import List, Optional
 
 import requests
@@ -13,20 +12,14 @@ from requests.exceptions import RequestException
 from . import _snmp_commands
 
 REQUEST_TIMEOUT_SEC = 2
-SHUTTER_OPEN_TIME_SEC = 16
-
-
-def _shutter_task() -> None:
-    """Сбрасывает бракованную пачку с конвейера"""
-    global SHUTTER_OPEN_TIME_SEC
-    send_shutter_down()
-    sleep(SHUTTER_OPEN_TIME_SEC)
-    send_shutter_up()
+SHUTTER_BEFORE_TIME_SEC = 8
+SHUTTER_OPEN_TIME_SEC = 25
 
 
 def send_shutter_down() -> None:
     """Опускает шторку для начала сброса пачек"""
     try:
+        logger.info("Сброс пачек начат")
         _snmp_commands.snmp_set(_snmp_commands.OID['ALARM-1'], _snmp_commands.on)
     except Exception:
         logger.error("Ошибка при отправлении запроса на опускание шторки")
@@ -35,6 +28,7 @@ def send_shutter_down() -> None:
 def send_shutter_up() -> None:
     """Поднимает шторку для прекращения сброса пачек"""
     try:
+        logger.info("Сброс пачек остановлен")
         _snmp_commands.snmp_set(_snmp_commands.OID['ALARM-1'], _snmp_commands.off)
     except Exception:
         logger.error("Ошибка при отправлении запроса на поднятие шторки")

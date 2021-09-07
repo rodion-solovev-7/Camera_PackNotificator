@@ -2,10 +2,12 @@
 Файл с функциями для отправки запросов к специфическому оборудованию
 (возможно, конвейеру или пинцету)
 """
+import os
+
 from pysnmp.hlapi import *
 
 community_string = 'public'
-ip_address_host = '192.168.1.30'
+ip_address_host = os.environ.get('SNMP_SHUTTER_IP', '10.98.26.40')
 port_snmp = 161
 on = Integer(1)
 off = Integer(0)

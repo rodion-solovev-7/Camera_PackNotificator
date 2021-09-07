@@ -177,3 +177,57 @@ class InstantCameraProcessingQueue(BaseResultProcessingQueue):
 
         self._queue.clear()
         return processed
+
+
+class IllegibleCameraProcessingQueue(BaseResultProcessingQueue):
+    """
+    Очередь для обработки результатов с одной камеры.
+    Хранит, валидирует результаты и возвращает соответствующие данные.
+
+    От ``InstantCameraProcessingQueue`` отличается тем,
+    что всегда возвращает успешные результаты обработки пачки (даже если ей не хватает кодов).
+    Недостающие пачки заменяются заглушками.
+    """
+    _queue: deque[CameraPackResult]
+
+    def __init__(self):
+        self._queue = deque()
+
+    def enqueue(self, result: CameraPackResult) -> None:
+        """
+        Обрабатывает полученную от сканера запись с QR- и шрихкодами.
+        Добавляет её в очередь для обработки.
+        """
+        self._queue.append(result)
+
+    def get_processed_latest(self) -> list[BaseEvent]:
+        """Валидирует пачки с одной камеры"""
+        processed = []
+
+        for pack in self._queue:
+            qr_codes = pack.qr_codes
+            barcodes = pack.barcodes
+            expected_count = pack.expected_codes_count
+
+            if len(qr_codes) != pack.expected_codes_count:
+                logger.debug(f"Ожидалось {pack.expected_codes_count} QR-кодов, "
+                             f"но с пачки считалось {len(qr_codes)}")
+                missed_qrcodes_count = expected_count - len(qr_codes)
+                qr_codes += [f"empty_{i}_{datetime.now().strftime('%x - %X')}"
+                             for i in range(1, missed_qrcodes_count + 1)]
+                logger.debug("Недостающие коды были заполнены заглушками")
+
+            if len(barcodes) != pack.expected_codes_count:
+                logger.debug(f"Ожидалось {pack.expected_codes_count} штрих-кодов, "
+                             f"но с пачки считалось {len(barcodes)}")
+                missed_barcodes_count = expected_count - len(barcodes)
+                barcodes += ['0000000000000'] * missed_barcodes_count
+                logger.debug("Недостающие коды были заполнены заглушками")
+
+            processed.append(PackWithCodes(
+                qr_codes=qr_codes,
+                barcodes=barcodes,
+            ))
+
+        self._queue.clear()
+        return processed

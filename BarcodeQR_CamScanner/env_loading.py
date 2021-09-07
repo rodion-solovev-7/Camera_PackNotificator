@@ -2,6 +2,8 @@ import os
 
 from loguru import logger
 
+from .packs_image_logging import ImagesSaver, FakeImagesSaver
+
 
 def setup_logger():
     log_path = os.getenv('LOG_PATH', 'logs/1camera.log')
@@ -17,6 +19,7 @@ def collect_scanners_args() -> list[tuple]:
     recognition_method = os.getenv('RECOGNITION_METHOD', 'BACKGROUND')
     threshold_value = os.getenv('RECOGNITION_THRESHOLD_VALUE', '0.5')
     model_path = os.getenv('MODEL_PATH', './model.tflite')
+    images_path = os.getenv('IMAGES_SAVE_PATH', '')
 
     video_urls = video_urls.split(';')
     threshold_value = float(threshold_value)
@@ -46,6 +49,7 @@ def collect_scanners_args() -> list[tuple]:
             auto_reconnect,
             recognition_method,
             recognizer_args,
+            ImagesSaver(images_path) if images_path != '' else FakeImagesSaver(),
         ) for video_url in video_urls
     ]
     return scanners_args

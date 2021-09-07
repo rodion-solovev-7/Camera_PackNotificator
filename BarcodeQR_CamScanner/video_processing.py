@@ -11,6 +11,7 @@ import numpy as np
 from .code_reading import get_codes_from_image, CodeType
 from .events import *
 from .pack_recognition.recognizers import BSPackRecognizer, NeuronetPackRecognizer
+from .packs_image_logging import BaseImagesLogger, FakeImagesSaver
 
 
 def _get_images_from_source(
@@ -55,6 +56,7 @@ def get_events_from_video(
         auto_reconnect: bool = True,
         recognition_method: str = "BACKGROUND",
         recognizer_args=None,
+        images_logger: BaseImagesLogger = FakeImagesSaver(),
 ) -> Iterable[CamScannerEvent]:
     """
     Генератор, возвращающий события с камеры-сканера
@@ -98,7 +100,9 @@ def get_events_from_video(
                 pack.start_time = datetime.now()
 
             # пытаемся прочитать QR и шрихкод
-            codes_dict = get_codes_from_image(image, sizer=0.4)
+            image = _resize_image(image, sizer=0.4)
+            images_logger.add(image)
+            codes_dict = get_codes_from_image(image, sizer=1.0)
 
             # сохраняем коды, игнорируя повторы
             pack.qr_codes = list(dict.fromkeys(pack.qr_codes + codes_dict[CodeType.QR_CODE]))
@@ -114,6 +118,10 @@ def get_events_from_video(
                 last_correct_barcode = pack.barcodes[-1]
             missing_barcodes_count = max(0, len(pack.qr_codes) - len(pack.barcodes))
             pack.barcodes.extend([last_correct_barcode] * missing_barcodes_count)
+
+            if len(pack.qr_codes) == 0:
+                images_logger.save()
+            images_logger.clear()
 
             pack.finish_time = datetime.now()
             yield pack
@@ -144,6 +152,7 @@ class CameraScannerProcess(mp.Process):
             auto_reconnect: bool,
             recognition_method: str,
             recognizer_args: dict,
+            images_logger: BaseImagesLogger,
     ) -> None:
         """
         Метод для запуска в отдельном процессе.
@@ -163,6 +172,7 @@ class CameraScannerProcess(mp.Process):
                 auto_reconnect=auto_reconnect,
                 recognition_method=recognition_method,
                 recognizer_args=recognizer_args,
+                images_logger=images_logger,
             )
 
             # бесконечный цикл, который получает события от камеры и кладёт их в очередь
