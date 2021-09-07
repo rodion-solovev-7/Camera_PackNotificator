@@ -38,7 +38,7 @@ class NeuronetPackRecognizer(BaseRecognizer):
 
     Parameters:
         model_path: путь к ``TF-Lite Flatbuffer`` файлу
-        threshold_value: пороговое значение для активации критерия
+        threshold_score: пороговое значение для активации критерия
 
     Attributes:
         _THRESHOLD_SCORE: пороговое значение, меньше которого
@@ -48,8 +48,8 @@ class NeuronetPackRecognizer(BaseRecognizer):
     _THRESHOLD_SCORE: float
     _image: Optional[np.ndarray]
 
-    def __init__(self, model_path: str, threshold_value: float = 0.6):
-        self._THRESHOLD_SCORE = threshold_value
+    def __init__(self, model_path: str, threshold_score: float = 0.6):
+        self._THRESHOLD_SCORE = threshold_score
         self._interpreter = Interpreter(model_path=model_path)
         self._interpreter.allocate_tensors()
         self._SKIPFRAME_MOD = 15

@@ -1,9 +1,10 @@
 import abc
+import inspect
 from collections import deque
 from inspect import signature
-from typing import Callable, Optional, Iterable
+from typing import Callable, Optional, Iterable, Union
 
-__all__ = ['BaseEvent', 'EventProcessor', 'EventsProcessingQueue']
+__all__ = ['BaseEvent', 'EventProcessor', 'EventsProcessingQueue', 'EventWorker']
 
 
 class BaseEvent(metaclass=abc.ABCMeta):
@@ -12,6 +13,7 @@ class BaseEvent(metaclass=abc.ABCMeta):
 
 class EventProcessor:
     """Обработчик событий, поступающих ему на вход."""
+
     def __init__(self):
         self.handlers = []
 
@@ -33,7 +35,7 @@ class EventProcessor:
             raise ValueError(message)
         self.handlers.append(handler)
 
-    def process_event(self, event: BaseEvent) -> Optional[Iterable[BaseEvent]]:
+    def process_event(self, event: BaseEvent) -> Iterable[BaseEvent]:
         """
         Обрабатывает событие поступившее на вход.
         К событию будут применены все добавленные подходящие ему обработчики
@@ -44,10 +46,15 @@ class EventProcessor:
         """
         handler_types = map(self._get_handler_eventtype, self.handlers)
         for handler_type, handler in zip(handler_types, self.handlers):
-            if isinstance(event, handler_type):
-                results = handler(event)
-                if results is not None:
-                    yield from results
+            if not isinstance(event, handler_type):
+                continue
+            ret = handler(event)
+            if isinstance(ret, BaseEvent):
+                yield from (ret,)
+                continue
+            if ret is not None:
+                yield from (event for event in ret if isinstance(event, BaseEvent))
+                continue
 
     @staticmethod
     def _get_handler_eventtype(handler: Callable) -> type:
@@ -88,24 +95,17 @@ class EventsProcessingQueue:
         self._queue = deque()
         self._processor = event_processor
 
-    def _process_event(self, event: BaseEvent):
-        result = self._processor.process_event(event)
+    def __len__(self):
+        return len(self._queue)
 
-        if result is None:
-            return
-        elif result is Iterable:
-            events = result
-            for event in events:
-                self.add_event(event)
-        elif result is BaseEvent:
-            event = result
+    def _process_event_and_add_new_events(self, event: BaseEvent):
+        events = self._processor.process_event(event)
+        for event in events:
             self.add_event(event)
 
     def process_latest(self):
         event = self.pop_latest()
-        if event is None:
-            return
-        self._process_event(event)
+        self._process_event_and_add_new_events(event)
 
     def add_event(self, event: BaseEvent):
         self._queue.append(event)
@@ -114,3 +114,24 @@ class EventsProcessingQueue:
         if len(self._queue) == 0:
             return None
         return self._queue.popleft()
+
+
+class EventWorker:
+    handlers = []
+    start_events = []
+
+    def __init__(self):
+        self._event_processor = EventProcessor()
+        self._event_processing_queue = EventsProcessingQueue(self._event_processor)
+
+    def set_event_handlers(self):
+        for handler in self.handlers:
+            self._event_processor.add_handler(handler)
+
+    def set_start_events(self):
+        for event in self.start_events:
+            self._event_processing_queue.add_event(event)
+
+    def run_processing(self):
+        while len(self._event_processing_queue) > 0:
+            self._event_processing_queue.process_latest()

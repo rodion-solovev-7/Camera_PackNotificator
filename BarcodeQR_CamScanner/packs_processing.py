@@ -4,7 +4,6 @@
 import abc
 from collections import deque
 from datetime import timedelta, datetime
-from typing import Iterable
 
 from loguru import logger
 
@@ -25,7 +24,7 @@ class BaseResultProcessingQueue(metaclass=abc.ABCMeta):
         """
 
     @abc.abstractmethod
-    def get_processed_latest(self) -> Iterable[BaseEvent]:
+    def get_processed_latest(self) -> list[BaseEvent]:
         """
         Синхронизирует последние результаты из очереди
         и возвращает последовательность с результатами их синхронизации
@@ -57,8 +56,10 @@ class Interval2CamerasProcessingQueue(BaseResultProcessingQueue):
         """
         self._queue.append(result)
 
-    def get_processed_latest(self) -> Iterable[BaseEvent]:
+    def get_processed_latest(self) -> list[BaseEvent]:
         """Синхронизирует пачки с разнык камер по пересечению их временных отрезков"""
+        final_results = []
+
         while len(self._queue) > 0 and \
                 datetime.now() - self._queue[0].finish_time > self.RESULT_TIMEOUT_TIME:
             logger.debug("Сопоставление данных с пачек")
@@ -84,12 +85,12 @@ class Interval2CamerasProcessingQueue(BaseResultProcessingQueue):
                 qr_codes1 += pack.qr_codes
 
             if len(qr_codes0) == 0 and len(qr_codes1) == 0:
-                yield PackBadCodes()
+                final_results.append(PackBadCodes())
                 continue
 
             if len(qr_codes0) > 0 and len(qr_codes1) > 0:
                 logger.warning("После сопоставления в группе с обеих сторон оказались коды")
-                yield PackBadCodes()
+                final_results.append(PackBadCodes())
                 continue
 
             barcodes = barcodes0 + barcodes1
@@ -101,13 +102,15 @@ class Interval2CamerasProcessingQueue(BaseResultProcessingQueue):
             if len(qr_codes) != packs_group[0].expected_codes_count:
                 logger.warning(f"Ожидалось {packs_group[0].expected_codes_count} кодов, "
                                f"но в сопоставленной группе их оказалось {len(qr_codes)}")
-                yield PackBadCodes()
+                final_results.append(PackBadCodes())
                 continue
 
-            yield PackWithCodes(
+            final_results.append(PackWithCodes(
                 qr_codes=qr_codes,
                 barcodes=barcodes,
-            )
+            ))
+
+        return final_results
 
     @staticmethod
     def _extract_oldest_group(packs: deque[CameraPackResult]) -> list[CameraPackResult]:
@@ -126,7 +129,7 @@ class Interval2CamerasProcessingQueue(BaseResultProcessingQueue):
 class InstantCameraProcessingQueue(BaseResultProcessingQueue):
     """
     Очередь для обработки результатов с одной камеры.
-    Хранит, валидирует результаты и возвращает соответствующие
+    Хранит, валидирует результаты и возвращает соответствующие данные.
     """
     _queue: deque[CameraPackResult]
 

@@ -18,7 +18,8 @@ from .handling import BaseEvent
 __all__ = [
     'BaseEvent', 'CamScannerEvent', 'TaskError', 'CameraPackResult',
     'EndScanning', 'StartScanning', 'PackWithCodes', 'PackBadCodes',
-    'OpenShutter', 'CloseShutter', 'UpdateExpectedCodesCount',
+    'OpenGate', 'CloseGate', 'UpdateExpectedCodesCount',
+    'ReadEventFromProcessQueue', 'Wait', 'ReadResultsFromValidationQueue',
 ]
 
 
@@ -48,12 +49,16 @@ class CameraPackResult(CamScannerEvent):
     expected_codes_count: Optional[int] = None
 
 
+@dataclass
 class EndScanning(CamScannerEvent):
-    """Завершение сканирования"""
+    """Завершение сканирования (убить процесс и по возможности завершить работу)"""
+    message: Optional[str] = None
 
 
+@dataclass
 class StartScanning(CamScannerEvent):
     """Начало сканирования"""
+    message: Optional[str] = None
 
 
 @dataclass
@@ -67,20 +72,23 @@ class PackWithCodes(BaseEvent):
     barcodes: list[str] = field(default_factory=list)
 
 
+@dataclass
 class PackBadCodes(BaseEvent):
     """
     Конечный результат с пачки, на которой не было обнаружено кодов
     """
 
 
-class OpenShutter(BaseEvent):
+@dataclass
+class OpenGate(BaseEvent):
     """
     Запрос на открытие шторки для отправки пачек на сброс
     """
+    open_time: datetime
 
 
 @dataclass
-class CloseShutter(BaseEvent):
+class CloseGate(BaseEvent):
     """
     Запрос на закрытие шторки для остановки сброса пачек
     """
@@ -93,3 +101,19 @@ class UpdateExpectedCodesCount(BaseEvent):
     Получение ожидаемого кол-ва кодов с сервера
     """
     update_time: datetime
+
+
+@dataclass
+class ReadEventFromProcessQueue(BaseEvent):
+    """Чтение кодов от дочернего процесса"""
+
+
+@dataclass
+class Wait(BaseEvent):
+    """Заставляет обработчик событий ждать"""
+
+
+@dataclass
+class ReadResultsFromValidationQueue(BaseEvent):
+    """Чтение валидированных кодов из очереди синхронизации"""
+    read_time: datetime

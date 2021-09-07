@@ -10,7 +10,7 @@ import numpy as np
 
 from .code_reading import get_codes_from_image, CodeType
 from .events import *
-from .pack_recognition.recognizers import BSPackRecognizer
+from .pack_recognition.recognizers import BSPackRecognizer, NeuronetPackRecognizer
 
 
 def _get_images_from_source(
@@ -53,12 +53,22 @@ def get_events_from_video(
         video_url: str,
         display_window: bool = True,
         auto_reconnect: bool = True,
-        recognizer_args: tuple = (),
+        recognition_method: str = "BACKGROUND",
+        recognizer_args=None,
 ) -> Iterable[CamScannerEvent]:
     """
     Генератор, возвращающий события с камеры-сканера
     """
-    pack_recognizer = BSPackRecognizer(*recognizer_args)
+    if recognizer_args is None:
+        recognizer_args = {}
+    if recognition_method == "BACKGROUND":
+        pack_recognizer = BSPackRecognizer(**recognizer_args)
+    elif recognition_method == "NEURONET":
+        pack_recognizer = NeuronetPackRecognizer(**recognizer_args)
+    else:
+        yield TaskError(message=f"Некорректный способ распознавания: '{recognition_method}'")
+        yield EndScanning()
+        return
 
     # noinspection PyUnusedLocal
     is_pack_visible_before = False
@@ -114,7 +124,7 @@ def get_events_from_video(
 
 class CameraScannerProcess(mp.Process):
     """
-    Процесс - обработчик событий с камеры.
+    Процесс - источник событий с камеры.
     Общается с управляющим процессом через ``queue``.
     """
 
@@ -132,7 +142,8 @@ class CameraScannerProcess(mp.Process):
             video_url: str,
             display_window: bool,
             auto_reconnect: bool,
-            recognizer_args: tuple,
+            recognition_method: str,
+            recognizer_args: dict,
     ) -> None:
         """
         Метод для запуска в отдельном процессе.
@@ -150,6 +161,7 @@ class CameraScannerProcess(mp.Process):
                 video_url=video_url,
                 display_window=display_window,
                 auto_reconnect=auto_reconnect,
+                recognition_method=recognition_method,
                 recognizer_args=recognizer_args,
             )
 
