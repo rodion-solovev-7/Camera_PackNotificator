@@ -13,9 +13,16 @@ from typing import Optional
 
 import cv2
 import numpy as np
+import pysnmp.hlapi as snmp
 from tensorflow.lite.python.interpreter import Interpreter
 
 from ._evaluation_methods import (get_neuronet_score, get_mog2_foreground_score)
+from ..image_utils import get_resized
+
+__all__ = [
+    'BaseRecognizer', 'NeuronetPackRecognizer',
+    'BSPackRecognizer', 'SensorPackRecognizer',
+]
 
 
 class BaseRecognizer(metaclass=abc.ABCMeta):
@@ -44,11 +51,10 @@ class NeuronetPackRecognizer(BaseRecognizer):
         _THRESHOLD_SCORE: пороговое значение, меньше которого
             ``is_recognized`` будет возвращать ``False``
     """
-    _interpreter: Interpreter
     _THRESHOLD_SCORE: float
-    _image: Optional[np.ndarray]
+    _interpreter: Interpreter
 
-    def __init__(self, model_path: str, threshold_score: float = 0.6):
+    def __init__(self, *, model_path: str, threshold_score: float = 0.6):
         self._THRESHOLD_SCORE = threshold_score
         self._interpreter = Interpreter(model_path=model_path)
         self._interpreter.allocate_tensors()
@@ -76,33 +82,40 @@ class BSPackRecognizer(BaseRecognizer):
     _DEACTIVATION_COUNT: int
     _THRESHOLD_SCORE: float
     _LEARNING_RATE: float
+    _SIZER: Optional[float]
+    _REGION: tuple[float, float, float, float]
     _recognized: bool
     _recognize_counter: int
     _mog2: cv2.BackgroundSubtractorMOG2
 
     def __init__(
             self,
+            *,
             background: np.ndarray = None,
-            borders: tuple[int, int] = (15, -20),
+            activation_interval: dict[str, int] = (15, -20),
             learning_rate: float = 1e-4,
-            threshold_score: float = 0.3,
-            size_multiplier: float = 0.4,
+            threshold_score: float = 0.8,
+            size_multiplier: float = 1.0,
+            region: dict[str, float] = None,
     ):
+        region = dict(x1=0, x2=1, y1=0, y2=1) if region is None else region
 
-        self._ACTIVATION_COUNT = max(borders)
-        self._DEACTIVATION_COUNT = min(borders)
+        self._ACTIVATION_COUNT = activation_interval['upper_bound']
+        self._DEACTIVATION_COUNT = activation_interval['lower_bound']
         self._THRESHOLD_SCORE = threshold_score
         self._LEARNING_RATE = learning_rate
-        self._SIZE_MULTIPLIER = size_multiplier
+        self._SIZER = size_multiplier
+        self._REGION = (region['x1'], region['y1'], region['x2'], region['y2'])
 
         self._recognized = False
         self._recognize_counter = 0
 
         self._mog2 = cv2.createBackgroundSubtractorMOG2(detectShadows=True)
         if background is not None:
-            self._mog2.apply(background, learningRate=1.0)
+            _ = self._has_foreground(background)
 
     def is_recognized(self, image: np.ndarray) -> bool:
+        # TODO: брать только нижнюю часть изображения (прокинуть регион в конструктор)
         recognized = self._has_foreground(image)
         if recognized:
             self._recognize_counter = max(self._recognize_counter, 0) + 1
@@ -121,13 +134,70 @@ class BSPackRecognizer(BaseRecognizer):
         return self._recognized
 
     def _has_foreground(self, image: np.ndarray) -> bool:
-        image = self._resize_image(image, self._SIZE_MULTIPLIER)
+        image = self.get_region_from_image(image, self._REGION)
+        if abs(self._SIZER - 1.0) > 1e-4:
+            image = get_resized(image, sizer=self._SIZER)
         learning_rate = self._LEARNING_RATE * (not self._recognized)
         score = get_mog2_foreground_score(self._mog2, image, learning_rate)
         return score > self._THRESHOLD_SCORE
 
     @staticmethod
-    def _resize_image(image: np.ndarray, multiplier: float) -> np.ndarray:
-        height = int(multiplier * image.shape[0])
-        width = int(multiplier * image.shape[1])
-        return cv2.resize(image, (width, height))
+    def get_region_from_image(
+            image: np.ndarray,
+            region: tuple[float, float, float, float],
+    ) -> np.ndarray:
+        w, h = image.shape[:2][::-1]
+        x1, y1, x2, y2 = region
+        x1, y1, x2, y2 = map(int, (x1 * w, y1 * h, x2 * w, y2 * h))
+        return image[y1:y2, x1:x2]
+
+
+class SensorPackRecognizer(BaseRecognizer):
+    """
+    Определение наличия пачки посредством SNMP-запросов к датчику расстояния
+    """
+    # TODO: возможно стоит вынести блокирующие запросы в асинхронный процесс
+    #  и обеспечить связь данного класса с процессом через очередь для исключения блокировок
+
+    OID = {
+        'ALARM-1': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.2',
+        'ALARM-2': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.3',
+        'ALARM-3': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.4',
+        'ALARM-4': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.5',
+    }
+
+    def __init__(self, *, sensor_ip: str):
+        # TODO: убрать костанты и сделать нормальную расширяемость
+        #  добавить усреднение результата и другие
+        self._SKIPFRAME_MOD = 15
+        self._skipframe_counter = self._SKIPFRAME_MOD + 1
+        self._recognized = False
+        self._snmp_detector_ip = sensor_ip
+        self._snmp_engine = snmp.SnmpEngine()
+        self._snmp_community_string = 'public'
+        self._snmp_port = 161
+        self._snmp_context = snmp.ContextData()
+
+    def is_recognized(self, _: np.ndarray) -> bool:
+        self._skipframe_counter = (self._skipframe_counter + 1) % self._SKIPFRAME_MOD
+        if self._skipframe_counter == 0:
+            self._recognized = self._has_pack()
+        return self._recognized
+
+    def _has_pack(self) -> bool:
+        erd = self._snmp_get(self.OID['ALARM-3'])
+        return bool(erd)
+
+    def _snmp_get(self, key: str) -> str:
+        """получение состояния"""
+        key_object = snmp.ObjectType(snmp.ObjectIdentity(key))
+        t = snmp.getCmd(
+            self._snmp_engine,
+            snmp.CommunityData(self._snmp_community_string),
+            snmp.UdpTransportTarget((self._snmp_detector_ip, self._snmp_port)),
+            self._snmp_context,
+            key_object,
+        )
+        errorIndication, errorStatus, errorIndex, varBinds = next(t)
+        for name, val in varBinds:
+            return val.prettyPrint()

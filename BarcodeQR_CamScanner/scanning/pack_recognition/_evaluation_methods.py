@@ -9,6 +9,8 @@ import numpy as np
 from skimage.metrics import structural_similarity as ssim
 from tensorflow.lite.python.interpreter import Interpreter
 
+from ..image_utils import get_normalized_sum
+
 
 def get_neuronet_score(interpreter: Interpreter, image: np.ndarray) -> float:
     """
@@ -24,29 +26,22 @@ def get_neuronet_score(interpreter: Interpreter, image: np.ndarray) -> float:
         показатель движения на изображении
             0.0 (движения нет) до 1.0 (на изображении двигаются все пиксели)
     """
-    input_detail: dict[str, Any]
-    output_detail: dict[str, Any]
-    input_detail = interpreter.get_input_details()[0]
-    output_detail = interpreter.get_output_details()[0]
+    input_detail: dict[str, Any] = interpreter.get_input_details()[0]
+    output_detail: dict[str, Any] = interpreter.get_output_details()[0]
 
     input_size = tuple(input_detail['shape'][[2, 1]])
 
-    rgb_image = cv2.resize(image, input_size)
-    rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
-    rgb_image = np.expand_dims(rgb_image, axis=0)
+    image = cv2.resize(image, input_size)
+    cv2.cvtColor(image, cv2.COLOR_BGR2RGB, image)
 
-    img = rgb_image.astype('float32') * (1 / 255)
+    input_layer = np.expand_dims(image, axis=0)
+    input_layer = input_layer.astype('float32') * (1 / 255)
 
-    try:
-        interpreter.set_tensor(input_detail['index'], img)
-        interpreter.invoke()
+    interpreter.set_tensor(input_detail['index'], input_layer)
+    interpreter.invoke()
 
-        predict_value = interpreter.get_tensor(output_detail['index'])[0][0]
-        return predict_value
-
-    # TODO: проверить наличие и конкретизировать исключение, либо убрать проверку
-    except Exception:
-        return float('nan')
+    predict_value = interpreter.get_tensor(output_detail['index'])[0][0]
+    return predict_value
 
 
 def get_absdiff_motion_score(img1: np.ndarray, img2: np.ndarray, img3: np.ndarray) -> float:
@@ -64,11 +59,10 @@ def get_absdiff_motion_score(img1: np.ndarray, img2: np.ndarray, img3: np.ndarra
     """
     diff12 = cv2.absdiff(img1, img2)
     diff23 = cv2.absdiff(img2, img3)
-    diff_intersection = cv2.bitwise_and(diff12, diff23)
-    _, blackwhite = cv2.threshold(diff_intersection, 5, 1, cv2.THRESH_BINARY)
-    pix_count = reduce(lambda x, y: x * y, blackwhite.shape)
-    white_count = np.sum(blackwhite)
-    return white_count / pix_count
+    diff_intersection = cv2.bitwise_and(diff12, diff23, dst=diff23)
+    cv2.threshold(diff_intersection, 5, 1, cv2.THRESH_BINARY, dst=diff_intersection)
+    score = get_normalized_sum(diff_intersection)
+    return score
 
 
 def get_reverse_ssim_score(img1: np.ndarray, img2: np.ndarray) -> float:
@@ -127,7 +121,6 @@ def get_mog2_foreground_score(
     """
     mask = mog2.apply(image, learningRate=learning_rate)
     # удаление серых теней
-    _, mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
-    pix_count = reduce(lambda x, y: x * y, mask.shape)
-    score = np.sum(mask) * (1 / (255 * pix_count))
+    mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)[1]
+    score = get_normalized_sum(mask)
     return score
