@@ -5,7 +5,6 @@ TODO: нужно адекватное описание роли компонен
 """
 import abc
 from collections import deque
-from datetime import datetime
 
 from loguru import logger
 
@@ -85,9 +84,9 @@ class ResultValidator(BaseResultConsolidationQueue):
 
             pack.codepairs += [
                 {
-                    CodeType.QR_CODE: f"empty_{i}_{datetime.now().strftime('%x - %X')}",
+                    CodeType.QR_CODE: '',
                     CodeType.BARCODE: '0' * 13,
-                } for i in range(1, missed_qrcodes_count + 1)
+                } for _ in range(1, missed_qrcodes_count + 1)
             ]
             logger.info(f"Недостающие {missed_qrcodes_count} кодов были заполнены заглушками")
             logger.info(f"Пачка {pack} помечена некорректной")

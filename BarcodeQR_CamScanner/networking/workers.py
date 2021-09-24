@@ -76,9 +76,11 @@ class AsyncMainWorker(BaseAsyncWorker):
         """
         while True:
             try:
-                v: CameraPackResult = self._queue.get_nowait()
-                logger.debug(f"Извлечены данные из очереди: {v}")
-                self._consolidator.enqueue(v)
+                raw_pack: CameraPackResult = self._queue.get_nowait()
+                logger.debug(f"Получены данные от процесса-камеры: {raw_pack}")
+                raw_pack.expected_codes_count = self._expected_codes_count
+                raw_pack.workmode = self._workmode
+                self._consolidator.enqueue(raw_pack)
             except Empty:
                 pass
             validated = self._consolidator.get_processed_latest()
