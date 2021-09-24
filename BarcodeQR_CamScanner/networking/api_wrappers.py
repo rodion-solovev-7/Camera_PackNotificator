@@ -50,10 +50,10 @@ class BaseApiV1(BaseNetworkingApi, metaclass=ABCMeta):
         - получения текущего режима обработки
     """
     _REQUEST_TIMEOUT_SEC: float
-    _domain_url: str
+    _domain: str
 
-    def __init__(self, domain_url: str, *, request_timeout_sec: float = 2):
-        self._domain_url = domain_url
+    def __init__(self, *, domain_url: str, request_timeout_sec: float = 2):
+        self._domain = domain_url
         self._REQUEST_TIMEOUT_SEC = request_timeout_sec
 
     async def notify_about_good_pack(self, pack: PackGoodCodes) -> None:
@@ -79,7 +79,7 @@ class BaseApiV1(BaseNetworkingApi, metaclass=ABCMeta):
             "auto" или "manual" в случае успешного получения,
                 либо `None` в случае ошибок.
         """
-        workmode_mapping = f'{self._domain_url}/api/v1_0/get_mode'
+        workmode_mapping = f'http://{self._domain}/api/v1_0/get_mode'
 
         logger.debug('Получение данных о текущем режиме записи')
         try:
@@ -103,7 +103,7 @@ class BaseApiV1(BaseNetworkingApi, metaclass=ABCMeta):
             натуральное число (кол-во кодов) в случае успешного получения,
                 либо `None` в случае ошибок.
         """
-        qr_count_mapping = f'{self._domain_url}/api/v1_0/current_batch'
+        qr_count_mapping = f'http://{self._domain}/api/v1_0/current_batch'
 
         logger.debug("Получение данных об ожидаемом кол-ве QR-кодов")
         try:
@@ -123,7 +123,7 @@ class BaseApiV1(BaseNetworkingApi, metaclass=ABCMeta):
         """
         Отправляет пару из QR- и штрихкода на сервер.
         """
-        success_pack_mapping = f'{self._domain_url}/api/v1_0/new_pack_after_pintset'
+        success_pack_mapping = f'http://{self._domain}/api/v1_0/new_pack_after_pintset'
 
         logger.debug("Отправка пары кодов на сервер: "
                      f"QR-код: {qr_code} штрих-код: {barcode}")
@@ -155,29 +155,25 @@ class BaseApiV1WithShutter(BaseApiV1, metaclass=ABCMeta):
     SHUTTER_ON = snmp.Integer(1)
     SHUTTER_OFF = snmp.Integer(0)
 
-    # TODO: выяснить что это за ... - переименовать и задокументировать
-    OID = {
-        'ALARM-1': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.2',
-        'ALARM-2': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.3',
-        'ALARM-3': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.4',
-        'ALARM-4': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.5',
-    }
-
     def __init__(
             self,
+            *,
             shutter_ip: str,
-            *args,
+            shutter_key: str,
             shutter_before_time_sec: float = 8,
             shutter_open_time_sec: float = 25,
             **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(**kwargs)
         self.shutter_ip = shutter_ip
+        self.shutter_identity = snmp.ObjectIdentity(shutter_key)
         self.SHUTTER_BEFORE_TIME_SEC = shutter_before_time_sec
         self.SHUTTER_OPEN_TIME_SEC = shutter_open_time_sec
 
         self.snmp_community_string = 'public'
         self.snmp_engine = snmp.SnmpEngine()
+        self.snmp_cummunity_data = snmp.CommunityData(self.snmp_community_string)
+        self.snmp_transport_target = snmp.UdpTransportTarget((self.shutter_ip, self.SHUTTER_PORT))
 
         self.is_shutter_open = False
         self.shutter_close_time = time.monotonic()
@@ -207,17 +203,15 @@ class BaseApiV1WithShutter(BaseApiV1, metaclass=ABCMeta):
         """
         logger.debug("Запрос на открытие сброса")
         try:
-            key_object = snmp.ObjectIdentity(self.OID['ALARM-1'])
-            value = self.SHUTTER_ON
             snmp.setCmd(
                 self.snmp_engine,
-                snmp.CommunityData(self.snmp_community_string),
-                snmp.UdpTransportTarget((self.shutter_ip, self.SHUTTER_PORT)),
+                self.snmp_cummunity_data,
+                self.snmp_transport_target,
                 snmp.ContextData(),
-                snmp.ObjectType(key_object, value),
+                snmp.ObjectType(self.shutter_identity, self.SHUTTER_ON),
             )
         except Exception as e:
-            logger.error("Ошибка при отправлении запроса на опускание шторки")
+            logger.error("Ошибка при отправлении запроса на открытие сброса")
             logger.opt(exception=e)
 
     def _send_shutter_close(self) -> None:
@@ -226,17 +220,15 @@ class BaseApiV1WithShutter(BaseApiV1, metaclass=ABCMeta):
         """
         logger.debug("Запрос на закрытие сброса")
         try:
-            key_object = snmp.ObjectIdentity(self.OID['ALARM-1'])
-            value = self.SHUTTER_OFF
             snmp.setCmd(
                 self.snmp_engine,
-                snmp.CommunityData(self.snmp_community_string),
-                snmp.UdpTransportTarget((self.shutter_ip, self.SHUTTER_PORT)),
+                self.snmp_cummunity_data,
+                self.snmp_transport_target,
                 snmp.ContextData(),
-                snmp.ObjectType(key_object, value),
+                snmp.ObjectType(self.shutter_identity, self.SHUTTER_OFF),
             )
         except Exception as e:
-            logger.error("Ошибка при отправлении запроса на поднятие шторки")
+            logger.error("Ошибка при отправлении запроса на закрытие сброса")
             logger.opt(exception=e)
 
 

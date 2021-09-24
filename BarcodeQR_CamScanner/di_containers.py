@@ -26,6 +26,7 @@ class ScanningContainer(containers.DeclarativeContainer):
     _SensorPackRecognizer = providers.Factory(
         recognizers.SensorPackRecognizer,
         sensor_ip=config.recognizing.Sensor.sensor_ip,
+        sensor_key=config.recognizing.Sensor.sensor_const,
     )
 
     PackRecognizer = providers.Selector(
@@ -65,13 +66,19 @@ class NetworkingContainer(containers.DeclarativeContainer):
     _ApiV1WithShutterDrop = providers.Factory(
         api_wrappers.ApiV1WithShutterDrop,
         domain_url=config.commutication.DropAndSendCodes.domain,
-        shutter_ip=config.commutication.DropAndSendCodes.shutter,
+        shutter_ip=config.commutication.DropAndSendCodes.shutter_ip,
+        shutter_key=config.commutication.DropAndSendCodes.shutter_const,
+        shutter_before_time_sec=config.commutication.DropAndSendCodes.shutter_wait_before_sec,
+        shutter_open_time_sec=config.commutication.DropAndSendCodes.shutter_wait_open_sec,
     )
 
     _ApiV1WithShutterDropAndCodesSending = providers.Factory(
         api_wrappers.ApiV1WithShutterDropAndCodesSending,
         domain_url=config.commutication.DropOnly.domain,
-        shutter_ip=config.commutication.DropOnly.shutter,
+        shutter_ip=config.commutication.DropOnly.shutter_ip,
+        shutter_key=config.commutication.DropOnly.shutter_const,
+        shutter_before_time_sec=config.commutication.DropAndSendCodes.shutter_wait_before_sec,
+        shutter_open_time_sec=config.commutication.DropAndSendCodes.shutter_wait_open_sec,
     )
 
     NetworkApi = providers.Selector(

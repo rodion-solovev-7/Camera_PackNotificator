@@ -17,6 +17,14 @@ read -r -p "смотрим где находится pip (если всё хор
 which python
 read -r -p "смотрим где находится python (если всё хорошо, то он должен быть где-то в папке с проектом, а не в системных папках)"
 python -V
-read -r -p "смотрим версию питона. Должна быть 3.9.* (* - какое-то другое число)"
+read -r -p "смотрим версию питона. Должна быть 3.9.+"
 read -r -p "ставим зависимости внутри окружения"
 pip install -r requirements.txt
+# зависимость, которая почему-то не ставится через requirements.txt
+pip install dependency_injector[yaml]
+if [ -d "venv" ]; then
+  read -r -p "конфиг запуска уже существует"
+else
+  read -r -p "конфиг запуска не найден - копируем шаблонный конфиг"
+  cp sample_config.yaml config.yaml
+fi

@@ -5,3 +5,5 @@ logs/*
 __pycache__/
 .idea/
 /pics
+/config.yaml
+/.env

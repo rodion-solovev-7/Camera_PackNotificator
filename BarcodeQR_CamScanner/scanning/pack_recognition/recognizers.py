@@ -159,14 +159,7 @@ class SensorPackRecognizer(BaseRecognizer):
     # TODO: возможно стоит вынести блокирующие запросы в асинхронный процесс
     #  и обеспечить связь данного класса с процессом через очередь для исключения блокировок
 
-    OID = {
-        'ALARM-1': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.2',
-        'ALARM-2': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.3',
-        'ALARM-3': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.4',
-        'ALARM-4': '.1.3.6.1.4.1.40418.2.6.2.2.1.3.1.5',
-    }
-
-    def __init__(self, *, sensor_ip: str):
+    def __init__(self, *, sensor_ip: str, sensor_key: str):
         # TODO: убрать костанты и сделать нормальную расширяемость
         #  добавить усреднение результата и другие
         self._SKIPFRAME_MOD = 15
@@ -175,6 +168,7 @@ class SensorPackRecognizer(BaseRecognizer):
         self._snmp_detector_ip = sensor_ip
         self._snmp_engine = snmp.SnmpEngine()
         self._snmp_community_string = 'public'
+        self._snmp_sensor_identity = snmp.ObjectIdentity(sensor_key)
         self._snmp_port = 161
         self._snmp_context = snmp.ContextData()
 
@@ -185,18 +179,17 @@ class SensorPackRecognizer(BaseRecognizer):
         return self._recognized
 
     def _has_pack(self) -> bool:
-        erd = self._snmp_get(self.OID['ALARM-3'])
+        erd = self._snmp_get()
         return bool(erd)
 
-    def _snmp_get(self, key: str) -> str:
+    def _snmp_get(self) -> str:
         """получение состояния"""
-        key_object = snmp.ObjectType(snmp.ObjectIdentity(key))
         t = snmp.getCmd(
             self._snmp_engine,
             snmp.CommunityData(self._snmp_community_string),
             snmp.UdpTransportTarget((self._snmp_detector_ip, self._snmp_port)),
             self._snmp_context,
-            key_object,
+            snmp.ObjectType(self._snmp_sensor_identity),
         )
         errorIndication, errorStatus, errorIndex, varBinds = next(t)
         for name, val in varBinds:
