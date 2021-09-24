@@ -79,7 +79,7 @@ class BaseApiV1(BaseNetworkingApi, metaclass=ABCMeta):
             "auto" или "manual" в случае успешного получения,
                 либо `None` в случае ошибок.
         """
-        workmode_mapping = f'{self._domain_url}/_api/v1_0/get_mode'
+        workmode_mapping = f'{self._domain_url}/api/v1_0/get_mode'
 
         logger.debug('Получение данных о текущем режиме записи')
         try:
@@ -103,7 +103,7 @@ class BaseApiV1(BaseNetworkingApi, metaclass=ABCMeta):
             натуральное число (кол-во кодов) в случае успешного получения,
                 либо `None` в случае ошибок.
         """
-        qr_count_mapping = f'{self._domain_url}/_api/v1_0/current_batch'
+        qr_count_mapping = f'{self._domain_url}/api/v1_0/current_batch'
 
         logger.debug("Получение данных об ожидаемом кол-ве QR-кодов")
         try:
@@ -123,7 +123,7 @@ class BaseApiV1(BaseNetworkingApi, metaclass=ABCMeta):
         """
         Отправляет пару из QR- и штрихкода на сервер.
         """
-        success_pack_mapping = f'{self._domain_url}/_api/v1_0/new_pack_after_pintset'
+        success_pack_mapping = f'{self._domain_url}/api/v1_0/new_pack_after_pintset'
 
         logger.debug("Отправка пары кодов на сервер: "
                      f"QR-код: {qr_code} штрих-код: {barcode}")
