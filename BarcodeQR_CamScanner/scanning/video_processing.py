@@ -9,6 +9,7 @@ import numpy as np
 
 from .code_reading import get_codes_from_image, CodeType
 from .image_loggers import BaseImagesLogger
+from .image_utils import get_resized
 from .pack_recognition.recognizers import BaseRecognizer
 from ..models import CameraPackResult, CameraProcessEvent
 
@@ -36,19 +37,13 @@ def _get_images_from_source(
             continue
 
         if display_window:
-            img2display = _resize_image(image, 0.25)
+            img2display = get_resized(image, sizer=0.25)
             cv2.imshow('', img2display)
             cv2.waitKey(1)
 
         yield image
     cap.release()
     cv2.destroyAllWindows()
-
-
-def _resize_image(image: np.ndarray, sizer: float) -> np.ndarray:
-    """Меняет размер изображения не изменяя соотношения"""
-    shape = tuple(int(v * sizer) for v in image.shape[:2])
-    return cv2.resize(image, shape[::-1])
 
 
 def get_events_from_video(
@@ -93,7 +88,8 @@ def get_events_from_video(
                 pack = CameraPackResult(start_time=datetime.now())
 
             # пытаемся прочитать QR и шрихкод
-            image = _resize_image(image, sizer=0.5)
+            # TODO: вынести sizer в конфиг и прокидывать через DI
+            image = get_resized(image, sizer=0.5)
             images_logger.add(image)
 
             codes_dict = get_codes_from_image(image)

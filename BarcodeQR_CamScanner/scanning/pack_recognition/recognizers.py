@@ -134,7 +134,7 @@ class BSPackRecognizer(BaseRecognizer):
         return self._recognized
 
     def _has_foreground(self, image: np.ndarray) -> bool:
-        image = self.get_region_from_image(image, self._REGION)
+        image = self._get_region_from_image(image, self._REGION)
         if abs(self._SIZER - 1.0) > 1e-4:
             image = get_resized(image, sizer=self._SIZER)
         learning_rate = self._LEARNING_RATE * (not self._recognized)
@@ -142,7 +142,7 @@ class BSPackRecognizer(BaseRecognizer):
         return score > self._THRESHOLD_SCORE
 
     @staticmethod
-    def get_region_from_image(
+    def _get_region_from_image(
             image: np.ndarray,
             region: tuple[float, float, float, float],
     ) -> np.ndarray:

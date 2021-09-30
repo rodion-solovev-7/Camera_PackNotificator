@@ -8,6 +8,7 @@ from typing import Union
 import cv2
 import numpy as np
 from pyzbar import pyzbar
+from pyzbar.wrapper import ZBarSymbol
 
 from .image_utils import get_resized
 
@@ -20,6 +21,12 @@ class CodeType(str, Enum):
     """
     QR_CODE = 'QRCODE'
     BARCODE = 'EAN13'
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__}.{self.name}>"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 def get_codes_from_image(
@@ -45,7 +52,8 @@ def get_codes_from_image(
     grayscaled: np.ndarray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
     cv2.threshold(grayscaled, 100, 255, cv2.THRESH_BINARY, grayscaled)
 
-    decoded_values = [decoded for decoded in pyzbar.decode(grayscaled)
+    symbols = [ZBarSymbol.EAN13, ZBarSymbol.QRCODE]
+    decoded_values = [decoded for decoded in pyzbar.decode(grayscaled, symbols)
                       if decoded.data != b'']
 
     for decoded in decoded_values:
