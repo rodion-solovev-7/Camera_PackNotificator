@@ -127,7 +127,7 @@ class BSPackRecognizer(BaseRecognizer):
         elif self._recognize_counter <= self._DEACTIVATION_COUNT:
             self._recognized = False
 
-        # нормализация в диапазоне
+        # удержание в диапазоне
         self._recognize_counter = max(self._recognize_counter, self._DEACTIVATION_COUNT)
         self._recognize_counter = min(self._recognize_counter, self._ACTIVATION_COUNT)
 
@@ -159,31 +159,32 @@ class SensorPackRecognizer(BaseRecognizer):
     # TODO: возможно стоит вынести блокирующие запросы в асинхронный процесс
     #  и обеспечить связь данного класса с процессом через очередь для исключения блокировок
 
-    def __init__(self, *, sensor_ip: str, sensor_key: str):
+    def __init__(self, *, sensor_ip: str, sensor_key: str, frameskip=2):
         # TODO: убрать костанты и сделать нормальную расширяемость
         #  добавить усреднение результата и другие
-        self._SKIPFRAME_MOD = 15
+        self._SKIPFRAME_MOD = frameskip
         self._skipframe_counter = self._SKIPFRAME_MOD + 1
-        self._recognized = False
+
         self._snmp_detector_ip = sensor_ip
-        self._snmp_engine = snmp.SnmpEngine()
         self._snmp_community_string = 'public'
-        self._snmp_sensor_identity = snmp.ObjectIdentity(sensor_key)
         self._snmp_port = 161
+
+        self._snmp_engine = snmp.SnmpEngine()
         self._snmp_context = snmp.ContextData()
+        self._snmp_community_data = snmp.CommunityData(self._snmp_community_string)
+        self._snmp_sensor_identity = snmp.ObjectIdentity(sensor_key)
+
+        self._recognized = False
 
     def is_recognized(self, _: np.ndarray) -> bool:
         self._skipframe_counter = (self._skipframe_counter + 1) % self._SKIPFRAME_MOD
         if self._skipframe_counter == 0:
-            self._recognized = self._has_pack()
+            recognized = self._has_pack()
+            if recognized is not None:
+                self._recognized = recognized
         return self._recognized
 
-    def _has_pack(self) -> bool:
-        erd = self._snmp_get()
-        return bool(erd)
-
-    def _snmp_get(self) -> str:
-        """получение состояния"""
+    def _has_pack(self) -> Optional[bool]:
         t = snmp.getCmd(
             self._snmp_engine,
             snmp.CommunityData(self._snmp_community_string),
@@ -193,4 +194,5 @@ class SensorPackRecognizer(BaseRecognizer):
         )
         errorIndication, errorStatus, errorIndex, varBinds = next(t)
         for name, val in varBinds:
-            return val.prettyPrint()
+            return bool(int(val.prettyPrint()))
+        return None

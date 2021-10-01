@@ -27,6 +27,7 @@ class ScanningContainer(containers.DeclarativeContainer):
         recognizers.SensorPackRecognizer,
         sensor_ip=config.recognizing.Sensor.sensor_ip,
         sensor_key=config.recognizing.Sensor.sensor_const,
+        frameskip=config.recognizing.Sensor.skipframes_mod,
     )
 
     PackRecognizer = providers.Selector(
