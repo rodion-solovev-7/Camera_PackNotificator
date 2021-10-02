@@ -167,13 +167,12 @@ class BaseApiV1WithShutter(BaseApiV1, metaclass=ABCMeta):
         super().__init__(**kwargs)
         self.shutter_ip = shutter_ip
         self.shutter_identity = snmp.ObjectIdentity(shutter_key)
+        self.snmp_community_data = snmp.CommunityData('public')
+        self.snmp_engine = snmp.SnmpEngine()
+        self.snmp_transport_target = snmp.UdpTransportTarget((self.shutter_ip, self.SHUTTER_PORT))
+
         self.SHUTTER_BEFORE_TIME_SEC = shutter_before_time_sec
         self.SHUTTER_OPEN_TIME_SEC = shutter_open_time_sec
-
-        self.snmp_community_string = 'public'
-        self.snmp_engine = snmp.SnmpEngine()
-        self.snmp_cummunity_data = snmp.CommunityData(self.snmp_community_string)
-        self.snmp_transport_target = snmp.UdpTransportTarget((self.shutter_ip, self.SHUTTER_PORT))
 
         self.is_shutter_open = False
         self.shutter_close_time = time.monotonic()
@@ -203,13 +202,13 @@ class BaseApiV1WithShutter(BaseApiV1, metaclass=ABCMeta):
         """
         logger.debug("Запрос на открытие сброса")
         try:
-            snmp.setCmd(
+            next(snmp.setCmd(
                 self.snmp_engine,
-                self.snmp_cummunity_data,
+                self.snmp_community_data,
                 self.snmp_transport_target,
                 snmp.ContextData(),
                 snmp.ObjectType(self.shutter_identity, self.SHUTTER_ON),
-            )
+            ))
         except Exception as e:
             logger.error("Ошибка при отправлении запроса на открытие сброса")
             logger.opt(exception=e)
@@ -220,13 +219,13 @@ class BaseApiV1WithShutter(BaseApiV1, metaclass=ABCMeta):
         """
         logger.debug("Запрос на закрытие сброса")
         try:
-            snmp.setCmd(
+            next(snmp.setCmd(
                 self.snmp_engine,
-                self.snmp_cummunity_data,
+                self.snmp_community_data,
                 self.snmp_transport_target,
                 snmp.ContextData(),
                 snmp.ObjectType(self.shutter_identity, self.SHUTTER_OFF),
-            )
+            ))
         except Exception as e:
             logger.error("Ошибка при отправлении запроса на закрытие сброса")
             logger.opt(exception=e)
