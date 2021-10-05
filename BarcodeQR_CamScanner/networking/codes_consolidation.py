@@ -40,6 +40,7 @@ class ResultValidator(BaseResultConsolidationQueue):
     Штрих-коды дописываются заглушкой ``000...000`` (13 нулей).
     """
     _queue: deque[CameraPackResult]
+    _blacklisted_qrs: set[str] = {'xps.tn.ru'}
 
     def __init__(self):
         self._queue = deque()
@@ -66,6 +67,9 @@ class ResultValidator(BaseResultConsolidationQueue):
             if pack.workmode != 'auto':
                 logger.info(f"Из-за неавтоматического режима работы проигнорирована пачка: {pack}")
                 continue
+
+            pack.codepairs = [d for d in pack.codepairs
+                              if d[CodeType.QR_CODE] not in self._blacklisted_qrs]
 
             expected_count = pack.expected_codes_count
             real_count = len(pack.codepairs)
