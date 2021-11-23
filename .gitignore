@@ -1,0 +1,15 @@
+# ignore cache, virtual environments and IDE's data
+/venv/
+__pycache__/
+.idea/
+
+# ignore config, cause it contain important data
+config.*
+.env
+
+# ignore ".log", ".log.zip", ".log.gz" and etc
+logs/*.log*
+logs/*.txt*
+
+# ignore non-project folder with experimental scripts
+/experiments/
