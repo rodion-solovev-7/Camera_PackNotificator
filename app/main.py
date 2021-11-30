@@ -4,51 +4,39 @@
 """
 import asyncio
 import sys
+from pathlib import Path
 
 from loguru import logger
 
-from app.di_containers import ApplicationContainer
+from app.di_containers import Application
 from app.processing import process_video
 
 
-def create_yaml_config_if_no_configs():
+def create_yaml_config_if_no_exists():
     """
     Копирует .yaml конфиг с настройками по умолчанию,
     если не находит других конфигов.
     """
-    config_extension = [
-        'yaml',
-        # TODO: добавить поддержку разных форматов конфигов
-        # 'env',
-        # 'xml',
-        # 'json',
-    ]
-
-    from pathlib import Path
-    workdir = Path('.')
-    for ext in config_extension:
-        if (workdir / f"config.{ext}").is_file():
-            break
-    else:
-        print("Not found existing config.yaml. Created new one config.yaml")
+    if not (Path('.') / f"config.yaml").is_file():
+        print("Not found existing config.yaml. Creating new one")
         from shutil import copyfile
         copyfile(Path(__file__).parent.parent / 'sample_config.yaml', './config.yaml')
 
 
-def get_complete_di_container() -> ApplicationContainer:
+def get_complete_di_container() -> Application:
     """
     Инициализирует DataInjection-контейнер из конфига в рабочей директории программы.
     Возвращает инициализированный контейнер.
 
     Returns:
-        ApplicationContainer
+        Application
     """
-    container = ApplicationContainer()
+    container = Application()
     container.config.from_yaml('config.yaml')
     return container
 
 
-def setup_logger(file: str, format_: str, level: str = 'DEBUG') -> None:
+def setup_logger(file: str, log_format: str, level: str = 'DEBUG') -> None:
     """
     Настраивает логгирование с ротацией и автоматическим сжатием в zip.
 
@@ -56,15 +44,15 @@ def setup_logger(file: str, format_: str, level: str = 'DEBUG') -> None:
         None
     """
     logger.remove()
-    logger.add(sink=sys.stdout, format=format_)
-    logger.add(sink=file, format=format_, level=level, rotation='1 day', compression='zip')
+    logger.add(sink=sys.stdout, format=log_format)
+    logger.add(sink=file, format=log_format, level=level, rotation='1 day', compression='zip')
 
 
 def get_running_parallel_eventloop() -> asyncio.AbstractEventLoop:
     """
     Запускает бесконечный eventloop в параллельном потоке исполнения.
 
-    !Э то необходимое зло чтобы не создавать по потоку на каждый сетевой запрос !
+    ! Это необходимое зло чтобы не создавать по потоку на каждый сетевой запрос !
 
     Отправлять задачи такому eventloop'у можно так:
         >>> async def coroutine(arg1, arg2):
@@ -92,39 +80,47 @@ def get_running_parallel_eventloop() -> asyncio.AbstractEventLoop:
     return eventloop
 
 
-def run() -> None:
+def main() -> None:
     """
     Запускает обработку видео с извещение бэкенда и логгированием происходящих событий.
-
-    Returns:
-        None
     """
-    create_yaml_config_if_no_configs()
+
+    create_yaml_config_if_no_exists()
 
     container = get_complete_di_container()
     setup_logger(
         file=container.get_log_path(),
-        format_=container.get_log_format(),
+        log_format=container.get_log_format(),
         level=container.get_log_level(),
     )
+
+    detector = container.detection.Detector()
+    accessor = container.accessing.Accessor()
+
+    eventloop = get_running_parallel_eventloop()
+
+    # TODO: подумать над более оптимальным доступом к данным для различных компонентов
+    #  (не таким)
+    asyncio.run_coroutine_threadsafe(detector.update(), eventloop)
+    asyncio.run_coroutine_threadsafe(accessor.update(), eventloop)
 
     logger.info("Программа запущена")
     try:
         process_video(
             video_path=container.get_video_path(),
-            detector=container.detection.Detector(),
-            tracker=container.tracking.Tracker(),
-            api=container.network.ApiWrapper(),
-            eventloop=get_running_parallel_eventloop(),
+            detector=detector,
+            accessor=accessor,
+            validator=container.validation.Validator(),
+            notifier=container.notification.Notifier(),
+            eventloop=eventloop,
             video_sizer=container.get_video_sizer(),
         )
     except KeyboardInterrupt:
         logger.info("Программа была остановлена пользователем (Ctrl+C)")
     except BaseException as e:
-        logger.critical("Программа была неожиданно завершена из-за ошибки")
-        logger.opt(exception=True).critical(e)
+        logger.opt(exception=e).critical("Программа была неожиданно завершена из-за ошибки")
     logger.info("Программа завершена")
 
 
 if __name__ == '__main__':
-    run()
+    main()

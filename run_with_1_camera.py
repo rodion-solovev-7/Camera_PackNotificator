@@ -4,8 +4,8 @@
 Если конфига в папке нет, то он будет автоматически скопирован из дефолтного.
 """
 
-from app.run import run
+from app.main import main
 
 
 if __name__ == '__main__':
-    run()
+    main()

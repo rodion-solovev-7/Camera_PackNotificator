@@ -1,7 +1,7 @@
 # Видео
 video_path: "sample1.mp4"
 video_sizer: 0.4
-show_video: True
+video_show: True
 
 # Логирование
 log_file: "logs/tracking.log"
@@ -11,23 +11,90 @@ log_format: "<green>{time:YYYY-MM-DD HH:mm:ss.SSS!UTC} UTC+00:00</> | \
              <yellow>PID={process:07d}</> | \
              <cyan>{name}:{function}:{line}</> - <level>{message}</>"
 
-# Сетевое взаимодействие
-network:
-  using: Placeholder
+# Сетевые устройства (неявно используются в некоторых конфигурациях)
+devices:
+    # бэкенд
+    backend:
+        # ip или домен бэкенда
+        domain: localhost
+        # таймаут для всех запросов бэкенду
+        timeout_sec: 2
 
-  Placeholder: {}
+    # шторка для сброса пачек
+    shutter:
+        # ip или домен заслонки
+        domain: 127.0.0.1
+        key: .1.2.3.1.2.3.40418.2.6.2.2.1.3.1.1
 
-  BackendSender:
-    domain_url: 127.0.0.1
+    # сенсор для определения наличия пачек
+    sensor:
+        # ip или домен датчика расстояния
+        domain: 127.0.0.2
+        key: .1.2.3.1.2.3.40418.2.6.2.2.1.3.1.2
 
-# Детектирование
+access:
+    using: Backend
+
+    # стартовый режим работы конвейера
+    work_mode: auto
+    # стартовое кол-во ожидаемых QR-кодов
+    codes_count: 2
+
+    # Не изменяет состояние (режим работы и кол-во кодов остаются изначальными)
+    Immutable: {}
+
+    # Регулярно обновляет кол-во кодов и режим работы бэкенда
+    Backend: {}
+
 detection:
-  using: Background
+    using: Background
 
-  Background: {}
+    # Распознавание наличия пачек нейросетью
+    Neuronet:
+        # путь к tensorflow.lite-модели, которая будет определять наличие пачки
+        model_path: model.tflite
+        # пороговое значение для результатов предсказания моделью
+        threshold: 0.6
+        # как часто запускать модель
+        # (если модель уже давала прогноз в течение этого срока, то будет выдано её прошлое предсказание)
+        pooling_period_sec: 0.5
 
-# Трекинг
-tracking:
-  using: Centroid
+    Background:
+        # скорость переобучения фона
+        learning_rate: 0.0001
+        # пороговое значение активации
+        threshold_score: 0.40
 
-  Centroid: {}
+    # Распознавание наличия пачек датчиком расстояния
+    Sensor:
+        pooling_period_sec: 0.5
+
+notification:
+    using: Backend
+
+    # Оповещение о пачках исключительно бэкенда (его адрес настраивается в devices)
+    Backend: {}
+
+    # Оповещение о пачках бэкенда с возможностью сбрасывать их шторкой и (не)извещать бэкенд
+    BackendWithShutter:
+        # время ожидания перед открытием сброса
+        shutter_wait_before_sec: 8
+        # время пока сброс открыт
+        shutter_wait_open_sec: 18
+        # отправлять запрос шторке, если пачка оказалась плохой
+        use_shutter_for_bad_packs: True
+        # отправлять данные бэкенду, если пачка оказалось плохой
+        use_backend_for_bad_packs: False
+
+validation:
+    using: CodesCount
+
+    # Валидация пачек по кол-ву QR кодов (запрещённые коды отсеиваются)
+    CodesCount:
+        # считать пачку невалидной, если кодов меньше ожидаемого
+        reject_if_less: True
+        # считать пачку невалидной, если кодов больше ожидаемого
+        reject_if_more: True
+        # заменять недостающие коды заглушками
+        # (пустая строка для qr и 13-и нулей для штрих-кодов)
+        placeholders_if_reject: True
