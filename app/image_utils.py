@@ -6,6 +6,9 @@
 import cv2
 import numpy as np
 
+from pyzbar import pyzbar
+from pyzbar.wrapper import ZBarSymbol
+
 __all__ = [
     'get_sliced_image',
     'get_undistorded_fisheye',
@@ -14,10 +17,6 @@ __all__ = [
     'draw_text',
     'draw_circle',
 ]
-
-from pyzbar import pyzbar
-
-from pyzbar.wrapper import ZBarSymbol
 
 
 def get_sliced_image(
@@ -78,7 +77,7 @@ def get_undistorded_fisheye(
 
     coeff = np.array(
         [k1, k2, p1, p2],
-        dtype=np.float64
+        dtype=np.float64,
     ).reshape((4, 1))
 
     return cv2.undistort(frame, cam, coeff, None, None)
@@ -171,7 +170,7 @@ def draw_circle(
         *,
         color: tuple[int, int, int] = (0, 0, 255),
         thickness: float = 1.0,
-):
+) -> None:
     """
     Добавляет на изображение круг (без копирования).
     """

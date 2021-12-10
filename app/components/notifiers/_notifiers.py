@@ -33,8 +33,9 @@ class AbstractBackendNotifier(BaseNotifier, metaclass=abc.ABCMeta):
         """
         Отправляет корректные коды бэкенду
         """
-        for codes in pack_data['codes']:
-            await self._backend.send_codepair(codes['QR_CODE'], codes['EAN13'])
+        logger.info(f"Отправка бэкенду кодов: {pack_data}")
+        for qr, bar in zip(pack_data['QRCODE'], pack_data['EAN13']):
+            await self._backend.send_codepair(qr, bar)
 
 
 class EmptyLoggingNotifier(BaseNotifier):

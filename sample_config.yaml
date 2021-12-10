@@ -6,9 +6,8 @@ video_show: True
 # Логирование
 log_file: "logs/tracking.log"
 log_level: "DEBUG"
-log_format: "<green>{time:YYYY-MM-DD HH:mm:ss.SSS!UTC} UTC+00:00</> | \
+log_format: "<green>{time:YYYY-MM-DD HH:mm:ss.SSS UTCZ}</> | \
              <level>{level: <8}</> | \
-             <yellow>PID={process:07d}</> | \
              <cyan>{name}:{function}:{line}</> - <level>{message}</>"
 
 # Сетевые устройства (неявно используются в некоторых конфигурациях)

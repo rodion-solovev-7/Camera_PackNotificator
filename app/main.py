@@ -4,6 +4,7 @@
 """
 import asyncio
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from loguru import logger
@@ -84,7 +85,6 @@ def main() -> None:
     """
     Запускает обработку видео с извещение бэкенда и логгированием происходящих событий.
     """
-
     create_yaml_config_if_no_exists()
 
     container = get_complete_di_container()
@@ -93,6 +93,7 @@ def main() -> None:
         log_format=container.get_log_format(),
         level=container.get_log_level(),
     )
+    logger.info(f"local time is {datetime.now()!s}")
 
     detector = container.detection.Detector()
     accessor = container.accessing.Accessor()
