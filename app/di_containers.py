@@ -150,7 +150,7 @@ class Validators(containers.DeclarativeContainer):
         validators.CodesCountValidator,
         reject_if_less=config.CodesCount.reject_if_less,
         reject_if_more=config.CodesCount.reject_if_more,
-        placeholders_if_reject=config.CodesCount.placeholders_if_reject,
+        replace_empty_if_reject=config.CodesCount.replace_empty_if_reject,
     )
 
     Validator = providers.Selector(

@@ -32,11 +32,11 @@ class CodesCountValidator(BaseValidator):
             *,
             reject_if_less: bool = True,
             reject_if_more: bool = True,
-            placeholders_if_reject: bool = True,
+            replace_empty_if_reject: bool = True,
     ):
         self._reject_if_less = reject_if_less
         self._reject_if_more = reject_if_more
-        self._fill_missing_if_reject = placeholders_if_reject
+        self._replace_if_reject = replace_empty_if_reject
 
     def get_validated(self, pack_data: dict) -> dict:
         """
@@ -58,13 +58,10 @@ class CodesCountValidator(BaseValidator):
         if pack_data['is_valid']:
             logger.info(f"Пачка {pack_data} помечена корректной")
         else:
-            if self._fill_missing_if_reject:
-                self._fill_missing_with_placeholders(
-                    qr_codes=pack_data['QRCODE'],
-                    barcodes=pack_data['EAN13'],
-                    expected=expected_count,
-                )
             logger.info(f"Пачка {pack_data} помечена НЕкорректной")
+            if self._replace_if_reject:
+                logger.info("Некорректная пачка заменена пустой")
+                pack_data = self._get_empty_pack(expected_count)
 
         return pack_data
 
@@ -106,17 +103,14 @@ class CodesCountValidator(BaseValidator):
         return True
 
     @staticmethod
-    def _fill_missing_with_placeholders(
-            qr_codes: list[str],
-            barcodes: list[str],
-            expected: int,
-    ):
+    def _get_empty_pack(expected: int) -> dict:
         """
-        Заполняет недостающие коды заглушками.
-        QR: ''
-        BAR: '000..000' (13 нулей)
+        Создаёт пустую пачку.
         """
-        while len(qr_codes) < expected:
-            qr_codes.append('')
-        while len(barcodes) < expected:
-            barcodes.append('0' * 13)
+        return dict(
+            QRCODE=[''] * expected,
+            EAN13=['0' * 13] * expected,
+            is_valid=False,
+            expected=expected,
+        )
+
