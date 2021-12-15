@@ -72,7 +72,8 @@ notification:
     using: Backend
 
     # Оповещение о пачках исключительно бэкенда (его адрес настраивается в devices)
-    Backend: {}
+    Backend:
+        use_backend_for_bad_packs: True
 
     # Оповещение о пачках бэкенда с возможностью сбрасывать их шторкой и (не)извещать бэкенд
     BackendWithShutter:

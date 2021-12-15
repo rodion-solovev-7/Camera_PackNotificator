@@ -102,6 +102,15 @@ class BackendNotifier(AbstractBackendNotifier):
     Версия API-обёртки для случаев, где сам бэкенд занимается сбросом плохих пачек.
     """
 
+    def __init__(
+            self,
+            *,
+            backend: Backend,
+            use_backend_for_bad_packs: bool = True,
+    ):
+        super().__init__(backend=backend)
+        self._should_send_bad_packs = use_backend_for_bad_packs
+
     async def notify_about_good_pack(self, pack_data: dict) -> None:
         """
         Отправляет корректные коды бэкенду
@@ -112,7 +121,11 @@ class BackendNotifier(AbstractBackendNotifier):
         """
         Отправляет некорректные коды бэкенду в надежде, что он их сбросит сам
         """
-        await self._send_pack_data(pack_data)
+        if self._should_send_bad_packs:
+            logger.info("Отправка плохой пачки")
+            await self._send_pack_data(pack_data)
+        else:
+            logger.info("Отправка плохой пачки проигнорирована")
 
 
 class BackendNotifierWithShutter(AbstractBackendNotifier, AbstractShutterNotifier):

@@ -121,6 +121,7 @@ class Notifiers(containers.DeclarativeContainer):
     _BackendNotifier = providers.Singleton(
         notifiers.BackendNotifier,
         backend=network.Backend,
+        use_backend_for_bad_packs=config.Backend.use_backend_for_bad_packs,
     )
 
     _BackendNotifierWithShutter = providers.Singleton(
